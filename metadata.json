@@ -1,0 +1,6 @@
+{
+  "name": "ابلاغ‌یار - سامانه هوشمند تحلیل ابلاغیه و وکلای دادگستری",
+  "description": "سامانه هوشمند ساده‌سازی متن ابلاغیه‌های قضایی سامانه ثنا، استخراج مواعد قانونی و اتصال به شبکه وکلای پایه یک دادگستری سراسر کشور",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
