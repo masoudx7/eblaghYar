@@ -383,7 +383,6 @@ export default function App() {
               onOpenChat={scrollToChat}
               onAskSectionQuestion={handleAskSectionQuestion}
               onOpenClauseModal={handleOpenClauseModal}
-              onSelectLawyer={handleSelectLawyer}
               onOpenDefenseDraft={() => setIsDefenseDraftOpen(true)}
               currentUser={currentUser}
             />

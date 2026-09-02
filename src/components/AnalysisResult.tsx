@@ -29,8 +29,7 @@ import {
   Download,
   ExternalLink,
 } from "lucide-react";
-import { JudicialNoticeAnalysis, LegalActionItem, Lawyer, AuthUser } from "../types";
-import { LawyersSection } from "./LawyersSection";
+import { JudicialNoticeAnalysis, LegalActionItem, AuthUser } from "../types";
 import { downloadICSFile, getGoogleCalendarLink } from "../utils/calendarExport";
 
 interface AnalysisResultProps {
@@ -38,7 +37,6 @@ interface AnalysisResultProps {
   onOpenChat: () => void;
   onAskSectionQuestion?: (question: string, sectionContext: { sectionTitle: string; sectionSnippet: string }) => void;
   onOpenClauseModal?: (initialClause?: string, initialQuestion?: string, sectionTitle?: string) => void;
-  onSelectLawyer?: (lawyer: Lawyer) => void;
   onOpenDefenseDraft?: () => void;
   currentUser?: AuthUser | null;
 }
@@ -48,7 +46,6 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
   onOpenChat,
   onAskSectionQuestion,
   onOpenClauseModal,
-  onSelectLawyer,
   onOpenDefenseDraft,
   currentUser,
 }) => {
@@ -773,15 +770,7 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
         </div>
       )}
 
-      {/* Matching Lawyers Network Section */}
-      {onSelectLawyer && (
-        <LawyersSection
-          currentAnalysis={analysis}
-          currentUser={currentUser}
-          onSelectLawyer={onSelectLawyer}
-          isEmbeddedInAnalysis={true}
-        />
-      )}
+
 
       {/* Report Legal Compliance Disclaimer */}
       <div className="p-4 rounded-2xl bg-[#FBFAF7] border border-[#E5E2D9] text-xs text-[#7A7874] flex items-start gap-2.5">
