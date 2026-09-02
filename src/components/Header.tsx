@@ -9,7 +9,6 @@ import {
   LogOut,
   ChevronDown,
   CheckCircle2,
-  Users,
 } from "lucide-react";
 import { AuthUser } from "../types";
 
@@ -17,7 +16,6 @@ interface HeaderProps {
   onOpenHistory: () => void;
   onOpenPrivacy: () => void;
   onOpenAuth: () => void;
-  onOpenLawyers?: () => void;
   currentUser: AuthUser | null;
   onLogout: () => void;
   historyCount: number;
@@ -29,7 +27,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHistory,
   onOpenPrivacy,
   onOpenAuth,
-  onOpenLawyers,
   currentUser,
   onLogout,
   historyCount,
@@ -85,16 +82,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          <button
-            id="lawyers-network-btn"
-            onClick={onOpenLawyers}
-            className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold text-[#8B4513] bg-[#FAF2ED] hover:bg-[#F5E6DC] border border-[#E8CEBF] rounded-xl transition-all cursor-pointer shadow-2xs"
-            title="مشاهده شبکه وکلای برگزیده دادگستری"
-          >
-            <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#8B4513]" />
-            <span className="hidden sm:inline">وکلای دادگستری</span>
-            <span className="sm:hidden text-[11px]">وکلا</span>
-          </button>
+
 
           <button
             id="history-btn"

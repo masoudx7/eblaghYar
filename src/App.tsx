@@ -7,16 +7,12 @@ import { HistoryDrawer } from "./components/HistoryDrawer";
 import { PrivacyNoticeModal } from "./components/PrivacyNoticeModal";
 import { ClauseInquiryModal } from "./components/ClauseInquiryModal";
 import { PhoneAuthModal } from "./components/PhoneAuthModal";
-import { LawyersDirectoryModal } from "./components/LawyersDirectoryModal";
-import { BookConsultationModal } from "./components/BookConsultationModal";
 import { DefenseDraftModal } from "./components/DefenseDraftModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
   SectionQueryContext,
   AuthUser,
-  Lawyer,
-  ConsultationBookingRequest,
 } from "./types";
 import { SampleNotice } from "./sampleData";
 import { Scale, AlertCircle, ArrowUp, RefreshCcw, CheckCircle2 } from "lucide-react";
@@ -32,10 +28,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isLawyersModalOpen, setIsLawyersModalOpen] = useState(false);
-  const [selectedLawyerForBooking, setSelectedLawyerForBooking] = useState<Lawyer | null>(null);
-  const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
-  const [bookingSuccessToast, setBookingSuccessToast] = useState<string | null>(null);
   const [lastAnalyzePayload, setLastAnalyzePayload] = useState<{
     fileBase64: string | null;
     mimeType: string | null;
@@ -300,20 +292,6 @@ export default function App() {
     scrollToChat();
   };
 
-  const handleSelectLawyer = (lawyer: Lawyer) => {
-    setSelectedLawyerForBooking(lawyer);
-    setIsBookingModalOpen(true);
-  };
-
-  const handleBookingSuccess = (booking: ConsultationBookingRequest) => {
-    setBookingSuccessToast(
-      `درخواست مشاوره شما با ${booking.lawyerName} (کد: ${booking.id}) با موفقیت ثبت شد.`
-    );
-    setTimeout(() => {
-      setBookingSuccessToast(null);
-    }, 6000);
-  };
-
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF8F5] text-[#3D3B38] font-['Vazirmatn',sans-serif]">
       {/* Top Header */}
@@ -321,30 +299,12 @@ export default function App() {
         onOpenHistory={() => setIsHistoryOpen(true)}
         onOpenPrivacy={() => setIsPrivacyOpen(true)}
         onOpenAuth={() => setIsAuthModalOpen(true)}
-        onOpenLawyers={() => setIsLawyersModalOpen(true)}
         currentUser={currentUser}
         onLogout={handleLogout}
         historyCount={history.length}
         onReset={handleReset}
         hasActiveResult={!!currentAnalysis}
       />
-
-      {/* Booking Toast */}
-      {bookingSuccessToast && (
-        <div className="fixed top-20 right-4 left-4 sm:left-auto sm:right-6 max-w-md z-50 bg-[#2E4A28] text-white p-4 rounded-2xl shadow-xl flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
-          <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0 mt-0.5" />
-          <div className="flex-1 text-xs sm:text-sm leading-relaxed">
-            <p className="font-bold">هماهنگی نوبت مشاوره انجام شد</p>
-            <p className="text-emerald-100 text-xs mt-0.5">{bookingSuccessToast}</p>
-          </div>
-          <button
-            onClick={() => setBookingSuccessToast(null)}
-            className="text-white/70 hover:text-white text-xs cursor-pointer"
-          >
-            ✕
-          </button>
-        </div>
-      )}
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
@@ -410,12 +370,6 @@ export default function App() {
             </div>
             <div className="flex items-center gap-4">
               <button
-                onClick={() => setIsLawyersModalOpen(true)}
-                className="text-[#8B4513] hover:text-[#5C2E0D] font-medium underline underline-offset-4 cursor-pointer"
-              >
-                بانک وکلای متخصص دادگستری
-              </button>
-              <button
                 onClick={() => setIsPrivacyOpen(true)}
                 className="text-[#5A6D52] hover:text-[#3D4839] font-medium underline underline-offset-4 cursor-pointer"
               >
@@ -456,25 +410,6 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
       />
 
-      {/* Lawyers Directory Modal */}
-      <LawyersDirectoryModal
-        isOpen={isLawyersModalOpen}
-        onClose={() => setIsLawyersModalOpen(false)}
-        onSelectLawyer={handleSelectLawyer}
-        currentAnalysis={currentAnalysis}
-        currentUser={currentUser}
-      />
-
-      {/* Book Consultation Modal */}
-      <BookConsultationModal
-        isOpen={isBookingModalOpen}
-        onClose={() => setIsBookingModalOpen(false)}
-        lawyer={selectedLawyerForBooking}
-        currentAnalysis={currentAnalysis}
-        currentUser={currentUser}
-        onSuccessBooking={handleBookingSuccess}
-      />
-
       {/* Clause Inquiry Modal */}
       <ClauseInquiryModal
         isOpen={clauseModalState.isOpen}
@@ -493,10 +428,6 @@ export default function App() {
           onClose={() => setIsDefenseDraftOpen(false)}
           analysis={currentAnalysis}
           currentUser={currentUser}
-          onConsultLawyer={(draftContent) => {
-            setIsDefenseDraftOpen(false);
-            setIsLawyersModalOpen(true);
-          }}
         />
       )}
 

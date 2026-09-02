@@ -32,7 +32,6 @@ interface DefenseDraftModalProps {
   onClose: () => void;
   analysis: JudicialNoticeAnalysis;
   currentUser: AuthUser | null;
-  onConsultLawyer?: (draftContent: string) => void;
 }
 
 export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
@@ -40,7 +39,6 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
   onClose,
   analysis,
   currentUser,
-  onConsultLawyer,
 }) => {
   const [draftType, setDraftType] = useState<DefenseDraftOptions["draftType"]>("defense_denial");
   const [userFullName, setUserFullName] = useState<string>("");
@@ -513,21 +511,6 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
               <span>چاپ / PDF</span>
             </button>
           </div>
-
-          {onConsultLawyer && (
-            <button
-              type="button"
-              id="btn-send-draft-to-lawyer"
-              onClick={() => {
-                onClose();
-                onConsultLawyer(editableText);
-              }}
-              className="w-full sm:w-auto px-4 py-2 bg-[#FAF6EC] hover:bg-[#F4EEDC] text-[#8F7732] border border-[#EBE4CF] rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs"
-            >
-              <Scale className="w-3.5 h-3.5" />
-              <span>ارسال به وکیل جهت بررسی نهایی و امضا</span>
-            </button>
-          )}
         </div>
       </div>
     </div>
