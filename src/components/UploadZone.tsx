@@ -294,26 +294,21 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
                     </button>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center gap-2.5 sm:gap-3">
-                    <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-[#E5E2D9] text-[#7A8C70] flex items-center justify-center transition-transform hover:scale-105">
-                      <UploadCloud className="w-6 h-6 sm:w-8 sm:h-8" />
+                  <div className="flex flex-col items-center gap-3 py-2">
+                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#E2EBE0] text-[#7A8C70] flex items-center justify-center transition-transform hover:scale-105 shadow-xs">
+                      <UploadCloud className="w-7 h-7 sm:w-8 sm:h-8" />
                     </div>
                     <div>
-                      <p className="font-bold text-[#4A4844] text-sm sm:text-lg">
-                        فایل پی‌دی‌اف ابلاغیه را اینجا بکشید یا لمس کنید
+                      <p className="font-bold text-[#3D3B38] text-base sm:text-lg">
+                        برای انتخاب فایل یا عکس ابلاغیه لمس کنید
                       </p>
                       <p className="text-xs sm:text-sm text-[#7A7874] mt-1 leading-relaxed">
-                        پشتیبانی از PDF ثنا، اسکن، عکس و اسکرین‌شات گوشی (تا ۲۰ مگابایت)
+                        پشتیبانی از PDF ثنا، اسکرین‌شات و تصاویر گوشی
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mt-1 text-xs text-[#A8A59D] font-medium">
-                      <span className="inline-flex items-center gap-1 text-[#5C5A55]">
-                        <FileText className="w-3.5 h-3.5 text-[#8B4513]" /> PDF عدل‌ایران
-                      </span>
-                      <span>•</span>
-                      <span className="inline-flex items-center gap-1 text-[#5C5A55]">
-                        <ImageIcon className="w-3.5 h-3.5 text-[#7A8C70]" /> عکس و اسکرین‌شات
-                      </span>
+                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F0F4EF] border border-[#D5DFD0] rounded-xl text-xs font-bold text-[#5A6D52] mt-1 shadow-2xs">
+                      <FileText className="w-3.5 h-3.5 text-[#7A8C70]" />
+                      <span>انتخاب از حافظه گوشی یا رایانه</span>
                     </div>
                   </div>
                 )}

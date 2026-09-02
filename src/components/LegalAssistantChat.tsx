@@ -32,7 +32,30 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
   onClearSectionContext,
   onOpenClauseInquiry,
 }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = localStorage.getItem("eblaghyar_chat_messages");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error("Failed to load chat from localStorage", e);
+    }
+    return [
+      {
+        id: "welcome-1",
+        role: "assistant",
+        content: analysis
+          ? `سلام! من مشاور حقوقی هوش مصنوعی شما هستم. ابلاغیه شما با موضوع **«${analysis.caseDetails.subject || 'پرونده قضایی'}»** بررسی شد. چه سوال یا ابهامی درباره این ابلاغیه یا مواعد قانونی آن دارید؟`
+          : `سلام! من مشاور حقوقی هوش مصنوعی شما هستم. لطفاً ابتدا ابلاغیه خود را بارگذاری کنید یا سوال حقوقی خود را بپرسید تا با استناد به قوانین موضوعه ایران راهنمایی‌تان کنم.`,
+        timestamp: new Date().toLocaleTimeString("fa-IR", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      },
+    ];
+  });
   const [input, setInput] = useState("");
   const [selectedTopic, setSelectedTopic] = useState<string>("همه بخش‌ها");
   const [isLoading, setIsLoading] = useState(false);
@@ -44,6 +67,33 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Save messages to localStorage on change
+  useEffect(() => {
+    try {
+      localStorage.setItem("eblaghyar_chat_messages", JSON.stringify(messages));
+    } catch (e) {
+      console.error("Failed to save chat to localStorage", e);
+    }
+  }, [messages]);
+
+  const handleClearChat = () => {
+    const welcomeMsg: ChatMessage = {
+      id: "welcome-" + Date.now(),
+      role: "assistant",
+      content: analysis
+        ? `سلام! گفتگو پاک‌سازی شد. درباره ابلاغیه با موضوع **«${analysis.caseDetails.subject || 'پرونده قضایی'}»** چه سوال دیگری دارید؟`
+        : `سلام! گفتگو پاک‌سازی شد. سوال حقوقی خود را بپرسید.`,
+      timestamp: new Date().toLocaleTimeString("fa-IR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+    setMessages([welcomeMsg]);
+    try {
+      localStorage.removeItem("eblaghyar_chat_messages");
+    } catch (e) {}
+  };
 
   // Suggested questions based on notice
   const quickQuestionsByTopic: Record<string, string[]> = {
@@ -217,7 +267,7 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
           {messages.length > 0 && (
             <button
               id="btn-clear-chat"
-              onClick={() => setMessages([])}
+              onClick={handleClearChat}
               className="flex items-center gap-1 text-xs text-[#7A7874] hover:text-[#3D3B38] px-2.5 py-1.5 rounded-xl hover:bg-[#F3F1ED] transition-colors cursor-pointer"
               title="شروع مجدد گفتگو"
             >
