@@ -303,6 +303,16 @@ app.use((req, _res, next) => {
 
 const apiRouter = express.Router();
 
+// Root API info endpoint
+apiRouter.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "EblaghYar API",
+    runtime: "vercel-serverless",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Health check endpoint
 apiRouter.get("/health", (req, res) => {
   res.json({
@@ -912,16 +922,17 @@ ${sectionPromptSnippet}
   }
 });
 
-// Mount the API Router on both "/api" and "/"
-// This ensures that whether Vercel preserves "/api" or strips it in rewrites, routes always match!
+// Mount the API Router on "/api" (and fallback on "/" in Vercel Serverless if prefix stripped)
 app.use("/api", apiRouter);
-app.use("/", apiRouter);
+if (process.env.VERCEL) {
+  app.use("/", apiRouter);
+}
 
-// Express API 404 handler for unknown /api/* requests
-app.all("/api/*", (req, res) => {
+// 404 handler for unmatched API routes
+apiRouter.use((req, res) => {
   res.status(404).json({
     success: false,
-    error: `مسیر درخواستی (${req.originalUrl || req.path}) در سرور یافت نشد.`,
+    error: `مسیر درخواستی (${req.originalUrl || req.baseUrl + req.path}) در سرور یافت نشد.`,
   });
 });
 

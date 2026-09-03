@@ -52,6 +52,42 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     return masked;
   };
 
+  // Transparent client-side image compressor for high-res camera photos to stay safely within Vercel 4.5MB payload limit
+  const compressImageIfNeeded = (dataUrl: string, mimeType: string): Promise<string> => {
+    return new Promise((resolve) => {
+      if (!mimeType.startsWith("image/") || dataUrl.length < 3.2 * 1024 * 1024) {
+        resolve(dataUrl);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 2048;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  };
+
   // Enhance image contrast via canvas for blurry or faint scanner prints
   const enhanceImageContrast = (base64Str: string): Promise<string> => {
     return new Promise((resolve) => {
@@ -129,13 +165,29 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
       return;
     }
 
+    const mime = file.type || (file.name.endsWith(".pdf") ? "application/pdf" : "image/jpeg");
     setSelectedFileName(file.name);
-    setSelectedMimeType(file.type || "application/pdf");
+    setSelectedMimeType(mime);
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const base64 = reader.result as string;
-      setSelectedFileBase64(base64);
+      if (mime.startsWith("image/")) {
+        try {
+          const optimized = await compressImageIfNeeded(base64, mime);
+          setSelectedFileBase64(optimized);
+        } catch {
+          setSelectedFileBase64(base64);
+        }
+      } else {
+        if (file.size > 4.5 * 1024 * 1024) {
+          setFileError(
+            "حجم فایل PDF برای پردازش ابری بیش از ۴.۵ مگابایت است. لطفاً فایل با حجم کمتر یا تصویر صفحه‌ی اصلی ابلاغیه را بارگذاری کنید یا متن آن را در برگه «ورود مستقیم متن» قرار دهید."
+          );
+          return;
+        }
+        setSelectedFileBase64(base64);
+      }
     };
     reader.onerror = () => {
       setFileError("خطا در خواندن فایل. لطفاً مجدداً تلاش کنید.");
