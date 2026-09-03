@@ -1,40 +1,52 @@
 /**
  * Helper to safely make API requests and parse JSON responses.
- * Prevents "JSON.parse: unexpected character at line 1 column 1" when server
- * returns HTML (e.g. 502/503 during restart, 404, or Express error pages).
+ * Includes automatic retry for transient dev server restarts / proxy warmups.
  */
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function safeFetchJson<T = any>(
   input: RequestInfo | URL,
-  init?: RequestInit
+  init?: RequestInit,
+  retriesLeft = 2
 ): Promise<T> {
   let res: Response;
   try {
     res = await fetch(input, init);
   } catch (networkErr: any) {
+    if (retriesLeft > 0) {
+      await sleep(1500);
+      return safeFetchJson<T>(input, init, retriesLeft - 1);
+    }
     throw new Error(
-      "عدم برقراری ارتباط با سرور. لطفاً اتصال اینترنت خود را بررسی کرده و مجدداً تلاش کنید."
+      "عدم برقراری ارتباط با سرور. لطفاً اتصال اینترنت خود را بررسی کرده و روی «تلاش مجدد» بزنید."
     );
   }
 
   const contentType = res.headers.get("content-type") || "";
 
-  // If response is not JSON (e.g. HTML error page from Vite / proxy)
+  // If response is not JSON (e.g. HTML error page from proxy/container during restart)
   if (!contentType.includes("application/json")) {
     const rawText = await res.text().catch(() => "");
-    console.error(`[API Error] Non-JSON response received from ${input}:`, rawText.slice(0, 200));
+    console.warn(`[API Info] Non-JSON response (${res.status}) from ${String(input)}:`, rawText.slice(0, 150));
+
+    // Transient server restart states (404/502/503/504) -> auto-retry
+    if ((res.status === 404 || res.status === 502 || res.status === 503 || res.status === 504) && retriesLeft > 0) {
+      await sleep(1800);
+      return safeFetchJson<T>(input, init, retriesLeft - 1);
+    }
 
     if (res.status === 413) {
       throw new Error("حجم فایل ارسالی بیش از حد مجاز سرور است. لطفاً فایلی با حجم کمتر انتخاب فرمایید.");
     }
-    if (res.status === 502 || res.status === 503 || res.status === 504) {
-      throw new Error("سرویس در حال آماده‌سازی یا راه‌اندازی است. لطفاً چند لحظه دیگر دکمه «تلاش مجدد» را بزنید.");
-    }
     if (res.status === 404) {
-      throw new Error("مسیر مورد نظر در سرور یافت نشد. لطفاً صفحه را تازه‌سازی کنید.");
+      throw new Error("سرور در حال بارگذاری مجدد بود. لطفاً دکمه «تلاش مجدد» را بزنید یا صفحه را رفرش فرمایید.");
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new Error("سرویس هوش مصنوعی در حال راه‌اندازی است. لطفاً دکمه «تلاش مجدد» را بزنید.");
     }
     throw new Error(
-      "پاسخ دریافتی از سرور در قالب استاندارد نیست. سرور ممکن است در حال شروع به کار باشد؛ لطفاً دوباره تلاش کنید."
+      "سرور در حال آماده‌سازی است. لطفاً دکمه «تلاش مجدد» را انتخاب کنید."
     );
   }
 
@@ -43,13 +55,23 @@ export async function safeFetchJson<T = any>(
     data = await res.json();
   } catch (parseErr) {
     console.error("[API Error] JSON parse failure:", parseErr);
+    if (retriesLeft > 0) {
+      await sleep(1500);
+      return safeFetchJson<T>(input, init, retriesLeft - 1);
+    }
     throw new Error("خطا در پردازش اطلاعات دریافتی از سرور. لطفاً دوباره تلاش نمایید.");
   }
 
   if (!res.ok) {
+    // If backend reports temporary traffic spike or 503, retry automatically
+    if ((res.status === 503 || data?.isTemporary) && retriesLeft > 0) {
+      await sleep(2000);
+      return safeFetchJson<T>(input, init, retriesLeft - 1);
+    }
     const errorMsg = data?.error || data?.message || `خطا در پردازش درخواست (${res.status})`;
     throw new Error(errorMsg);
   }
 
   return data as T;
 }
+
