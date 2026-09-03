@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { JudicialNoticeAnalysis, ChatMessage, SectionQueryContext } from "../types";
+import { safeFetchJson } from "../utils/apiHelper";
 
 interface LegalAssistantChatProps {
   analysis: JudicialNoticeAnalysis | null;
@@ -177,19 +178,21 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: newMessages.slice(-8), // send last 8 for context
-          contextAnalysis: analysis,
-          userQuestion: query,
-          sectionContext: activeSection,
-        }),
-      });
+      const data = await safeFetchJson<{ success: boolean; answer: string; error?: string }>(
+        "/api/chat",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: newMessages.slice(-8), // send last 8 for context
+            contextAnalysis: analysis,
+            userQuestion: query,
+            sectionContext: activeSection,
+          }),
+        }
+      );
 
-      const data = await response.json();
-      if (!response.ok || !data.success) {
+      if (!data.success || !data.answer) {
         throw new Error(data.error || "خطا در دریافت پاسخ از دستیار حقوقی");
       }
 

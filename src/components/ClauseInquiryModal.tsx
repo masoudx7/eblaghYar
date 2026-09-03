@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { JudicialNoticeAnalysis } from "../types";
+import { safeFetchJson } from "../utils/apiHelper";
 
 interface ClauseInquiryModalProps {
   isOpen: boolean;
@@ -69,22 +70,24 @@ export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
     setResponseAnswer(null);
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [],
-          contextAnalysis: analysis,
-          userQuestion: finalQuestion,
-          sectionContext: {
-            sectionTitle: sectionTitle || "بند مشخص از ابلاغیه قضایی",
-            sectionSnippet: clauseText || "پرسش روی بخش انتخابی ابلاغیه",
-          },
-        }),
-      });
+      const data = await safeFetchJson<{ success: boolean; answer: string; error?: string }>(
+        "/api/chat",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [],
+            contextAnalysis: analysis,
+            userQuestion: finalQuestion,
+            sectionContext: {
+              sectionTitle: sectionTitle || "بند مشخص از ابلاغیه قضایی",
+              sectionSnippet: clauseText || "پرسش روی بخش انتخابی ابلاغیه",
+            },
+          }),
+        }
+      );
 
-      const data = await response.json();
-      if (!response.ok || !data.success) {
+      if (!data.success || !data.answer) {
         throw new Error(data.error || "خطا در تحلیل بند حقوقی");
       }
 

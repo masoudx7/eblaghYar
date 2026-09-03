@@ -15,6 +15,7 @@ import {
   AuthUser,
 } from "./types";
 import { SampleNotice } from "./sampleData";
+import { safeFetchJson } from "./utils/apiHelper";
 import { Scale, AlertCircle, ArrowUp, RefreshCcw, CheckCircle2 } from "lucide-react";
 
 const HISTORY_STORAGE_KEY = "judicial_notice_analysis_history";
@@ -63,10 +64,9 @@ export default function App() {
       if (cachedUser && token) {
         setCurrentUser(JSON.parse(cachedUser));
         // Verify with server in background
-        fetch("/api/auth/me", {
+        safeFetchJson<{ authenticated: boolean; user: any }>("/api/auth/me", {
           headers: { Authorization: `Bearer ${token}` },
         })
-          .then((res) => res.json())
           .then((data) => {
             if (data?.authenticated && data?.user) {
               setCurrentUser(data.user);
@@ -168,14 +168,16 @@ export default function App() {
     setLastAnalyzePayload({ fileBase64, mimeType, rawText, fileName });
 
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileBase64, mimeType, rawText }),
-      });
+      const json = await safeFetchJson<{ success: boolean; data: JudicialNoticeAnalysis; error?: string }>(
+        "/api/analyze",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileBase64, mimeType, rawText }),
+        }
+      );
 
-      const json = await res.json();
-      if (!res.ok || !json.success) {
+      if (!json.success || !json.data) {
         throw new Error(json.error || "خطا در تحلیل ابلاغیه قضایی توسط هوش مصنوعی");
       }
 

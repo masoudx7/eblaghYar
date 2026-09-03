@@ -12,6 +12,7 @@ import {
   MessageSquareCode,
 } from "lucide-react";
 import { AuthUser } from "../types";
+import { safeFetchJson } from "../utils/apiHelper";
 
 interface PhoneAuthModalProps {
   isOpen: boolean;
@@ -90,14 +91,20 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/send-otp", {
+      const data = await safeFetchJson<{
+        success: boolean;
+        phoneNumber?: string;
+        cooldownSeconds?: number;
+        isDevSimulated?: boolean;
+        devCode?: string;
+        error?: string;
+      }>("/api/auth/send-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phoneNumber }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || "خطا در ارسال کد تایید با کاوه نگار");
       }
 
@@ -179,14 +186,18 @@ export const PhoneAuthModal: React.FC<PhoneAuthModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/verify-otp", {
+      const data = await safeFetchJson<{
+        success: boolean;
+        user?: any;
+        token?: string;
+        error?: string;
+      }>("/api/auth/verify-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phoneNumber, code }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
+      if (!data.success || !data.user || !data.token) {
         throw new Error(data.error || "کد تایید وارد شده نادرست یا منقضی شده است.");
       }
 

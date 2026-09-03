@@ -190,7 +190,14 @@ async function generateWithFallbackAndRetry(
 }
 
 function cleanAndParseJSON(raw: string): any {
+  if (!raw) {
+    throw new Error("پاسخ مدل هوش مصنوعی خالی است.");
+  }
   let clean = raw.trim();
+  // Remove UTF-8 BOM if present
+  if (clean.charCodeAt(0) === 0xfeff) {
+    clean = clean.slice(1).trim();
+  }
   if (clean.startsWith("```json")) {
     clean = clean.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
   } else if (clean.startsWith("```")) {
@@ -205,9 +212,14 @@ function cleanAndParseJSON(raw: string): any {
     const lastBrace = clean.lastIndexOf("}");
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       const substring = clean.substring(firstBrace, lastBrace + 1);
-      return JSON.parse(substring);
+      try {
+        return JSON.parse(substring);
+      } catch (innerErr) {
+        // Fall through
+      }
     }
-    throw e;
+    console.error("[cleanAndParseJSON error] Failed parsing. Preview:", clean.slice(0, 300));
+    throw new Error("قالب خروجی ساختاریافته دریافت نشد. لطفاً مجدداً امتحان کنید.");
   }
 }
 
@@ -834,6 +846,30 @@ ${sectionPromptSnippet}
           : error?.message || "خطا در برقراری ارتباط با دستیار حقوقی",
       });
     }
+  });
+
+  // 404 handler for unknown /api/* requests so they don't fall into Vite SPA fallback (HTML)
+  app.all("/api/*", (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: `مسیر درخواستی (${req.path}) در سرور یافت نشد.`,
+    });
+  });
+
+  // Express API error handling middleware (catches payload too large, JSON syntax error, etc.)
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("API Express Error:", err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    const status = err.status || err.statusCode || 500;
+    return res.status(status).json({
+      success: false,
+      error:
+        err.type === "entity.too.large"
+          ? "حجم فایل یا درخواست ارسالی بیش از حد مجاز سرور است."
+          : err.message || "خطای داخلی سرور",
+    });
   });
 
   // Vite Middleware configuration

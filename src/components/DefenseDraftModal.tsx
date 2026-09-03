@@ -26,6 +26,7 @@ import {
   DefenseDraftOptions,
   GeneratedDefenseDraft,
 } from "../utils/defenseDraftGenerator";
+import { safeFetchJson } from "../utils/apiHelper";
 
 interface DefenseDraftModalProps {
   isOpen: boolean;
@@ -91,20 +92,22 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
         ? customEvidenceText.split("\n").filter((l) => l.trim().length > 0)
         : undefined;
 
-      const res = await fetch("/api/generate-defense-draft", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          analysis,
-          draftType,
-          userCustomFacts,
-          userFullName,
-          userNationalCode,
-          attachedEvidences: evidences,
-        }),
-      });
+      const data = await safeFetchJson<{ success: boolean; draft?: any; error?: string }>(
+        "/api/generate-defense-draft",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            analysis,
+            draftType,
+            userCustomFacts,
+            userFullName,
+            userNationalCode,
+            attachedEvidences: evidences,
+          }),
+        }
+      );
 
-      const data = await res.json();
       if (data.success && data.draft) {
         const aiDraft = data.draft;
         const formatted: GeneratedDefenseDraft = {
