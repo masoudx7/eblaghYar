@@ -167,9 +167,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Fallback models in case of temporary 503 / high demand spikes
 const FALLBACK_MODELS = [
-  "gemini-3.1-flash-lite",
+  "gemini-3.8-flash",
   "gemini-flash-latest",
-  "gemini-3.7-flash",
+  "gemini-3.1-flash-lite",
 ];
 
 async function generateWithFallbackAndRetry(
