@@ -27,7 +27,7 @@
   "react-markdown": "^10.1.0",
   "uuid": "^9.0.1",
   "vite": "^6.2.3"
-}
+},
   "devDependencies": {
     "@capacitor/cli": "^8.5.1",
     "@types/express": "^4.17.21",
