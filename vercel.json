@@ -3,22 +3,22 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/index.ts": {
+    "server.ts": {
       "maxDuration": 60,
       "memory": 1024
     }
   },
   "rewrites": [
     {
-      "source": "/api",
-      "destination": "/api"
-    },
-    {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "/server.ts"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/api",
+      "destination": "/server.ts"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
