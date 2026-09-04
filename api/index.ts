@@ -1,4 +1,4 @@
-import app from './app.js';
+import app from "../server";
 
 export const config = {
   maxDuration: 60,
