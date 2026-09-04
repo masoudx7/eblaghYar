@@ -20,7 +20,7 @@ import {
   ChevronDown,
   RefreshCw,
 } from "lucide-react";
-import { JudicialNoticeAnalysis, AuthUser, Lawyer } from "../types";
+import { JudicialNoticeAnalysis, Lawyer } from "../types";
 import {
   buildDefenseDraft,
   DefenseDraftOptions,
@@ -32,14 +32,13 @@ interface DefenseDraftModalProps {
   isOpen: boolean;
   onClose: () => void;
   analysis: JudicialNoticeAnalysis;
-  currentUser: AuthUser | null;
+  currentUser?: any;
 }
 
 export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
   isOpen,
   onClose,
   analysis,
-  currentUser,
 }) => {
   const [draftType, setDraftType] = useState<DefenseDraftOptions["draftType"]>("defense_denial");
   const [userFullName, setUserFullName] = useState<string>("");

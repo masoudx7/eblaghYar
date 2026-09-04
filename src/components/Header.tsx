@@ -1,23 +1,14 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   Scale,
   ShieldCheck,
   History,
   FileText,
-  Smartphone,
-  User,
-  LogOut,
-  ChevronDown,
-  CheckCircle2,
 } from "lucide-react";
-import { AuthUser } from "../types";
 
 interface HeaderProps {
   onOpenHistory: () => void;
   onOpenPrivacy: () => void;
-  onOpenAuth: () => void;
-  currentUser: AuthUser | null;
-  onLogout: () => void;
   historyCount: number;
   onReset: () => void;
   hasActiveResult: boolean;
@@ -26,15 +17,10 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   onOpenHistory,
   onOpenPrivacy,
-  onOpenAuth,
-  currentUser,
-  onLogout,
   historyCount,
   onReset,
   hasActiveResult,
 }) => {
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-
   const toPersianDigits = (str: string | number) => {
     const persian = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
     return String(str).replace(/\d/g, (d) => persian[parseInt(d, 10)]);
@@ -58,11 +44,11 @@ export const Header: React.FC<HeaderProps> = ({
                 ابلاغ‌یار
               </h1>
               <span className="hidden md:inline-flex text-[10px] font-bold bg-[#F0F4EF] text-[#5A6D52] border border-[#D5DFD0] px-2 py-0.5 rounded-full items-center gap-1">
-                <span>سامانه هوشمند ابلاغیه و وکلا</span>
+                <span>سامانه هوشمند تحلیل ابلاغیه</span>
               </span>
             </div>
             <p className="text-[11px] text-[#7A7874] hidden lg:block mt-0.5">
-              تحلیل آنی ابلاغیه‌های ثنا و اتصال هوشمند به وکلای پایه یک دادگستری
+              تحلیل آنی و هوشمند ابلاغیه‌های قضایی سامانه ثنا
             </p>
           </div>
         </div>
@@ -108,80 +94,6 @@ export const Header: React.FC<HeaderProps> = ({
             <ShieldCheck className="w-4 h-4 text-[#7A8C70]" />
             <span>قوانین و حریم خصوصی</span>
           </button>
-
-          {/* User Auth Section */}
-          {currentUser ? (
-            <div className="relative">
-              <button
-                id="user-profile-btn"
-                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-[#F0F4EF] hover:bg-[#E2EBE0] border border-[#D5DFD0] rounded-xl text-xs font-medium text-[#4A4844] transition-all cursor-pointer shadow-2xs"
-              >
-                <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#7A8C70] text-white flex items-center justify-center">
-                  <User className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                </div>
-                <span className="font-mono text-xs font-bold text-[#3D3B38] hidden xs:inline sm:inline">
-                  {toPersianDigits(currentUser.maskedPhone || currentUser.phoneNumber)}
-                </span>
-                <ChevronDown className="w-3 h-3 text-[#7A7874]" />
-              </button>
-
-              {/* Dropdown Menu */}
-              {isUserMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setIsUserMenuOpen(false)}
-                  />
-                  <div className="absolute left-0 mt-2 w-56 bg-white border border-[#E5E2D9] rounded-2xl shadow-xl z-50 p-2 text-xs animate-in fade-in zoom-in-95 duration-150">
-                    <div className="p-3 bg-[#FAF8F5] rounded-xl mb-2 border border-[#EBE8E0]">
-                      <div className="flex items-center gap-1.5 text-[#5A6D52] font-bold mb-1">
-                        <CheckCircle2 className="w-4 h-4 text-[#7A8C70]" />
-                        <span>وارد شده به سامانه</span>
-                      </div>
-                      <p className="text-[11px] text-[#7A7874]">
-                        شماره همراه:{" "}
-                        <strong className="font-mono text-[#3D3B38]">
-                          {toPersianDigits(currentUser.phoneNumber)}
-                        </strong>
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        onOpenHistory();
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[#4A4844] hover:bg-[#F3F1ED] rounded-xl text-right transition-colors cursor-pointer"
-                    >
-                      <History className="w-4 h-4 text-[#7A8C70]" />
-                      <span>مشاهده پرونده‌ها و تاریخچه</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        onLogout();
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[#8B4513] hover:bg-[#FAF0ED] rounded-xl text-right transition-colors cursor-pointer mt-1"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      <span>خروج از حساب کاربری</span>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <button
-              id="login-btn"
-              onClick={onOpenAuth}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs sm:text-sm font-bold text-white bg-[#7A8C70] hover:bg-[#68795F] rounded-xl transition-all shadow-xs cursor-pointer"
-            >
-              <Smartphone className="w-4 h-4" />
-              <span>ورود با شماره همراه</span>
-            </button>
-          )}
         </div>
       </div>
     </header>

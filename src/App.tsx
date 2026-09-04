@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { Header } from "./components/Header";
 import { UploadZone } from "./components/UploadZone";
 import { AnalysisResult } from "./components/AnalysisResult";
@@ -6,29 +7,26 @@ import { LegalAssistantChat } from "./components/LegalAssistantChat";
 import { HistoryDrawer } from "./components/HistoryDrawer";
 import { PrivacyNoticeModal } from "./components/PrivacyNoticeModal";
 import { ClauseInquiryModal } from "./components/ClauseInquiryModal";
-import { PhoneAuthModal } from "./components/PhoneAuthModal";
 import { DefenseDraftModal } from "./components/DefenseDraftModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
   SectionQueryContext,
-  AuthUser,
 } from "./types";
 import { SampleNotice } from "./sampleData";
-import { safeFetchJson } from "./utils/apiHelper";
-import { Scale, AlertCircle, ArrowUp, RefreshCcw, CheckCircle2 } from "lucide-react";
+import { getApiUrl } from "./utils/apiHelper";
+import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X } from "lucide-react";
 
 const HISTORY_STORAGE_KEY = "judicial_notice_analysis_history";
-const AUTH_TOKEN_KEY = "judicial_notice_auth_token";
-const AUTH_USER_KEY = "judicial_notice_auth_user";
+const DEVICE_ID_KEY = "eblaghyar_device_id";
 
 export default function App() {
   const [currentAnalysis, setCurrentAnalysis] = useState<JudicialNoticeAnalysis | null>(null);
   const [currentFileName, setCurrentFileName] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [deviceId, setDeviceId] = useState<string>("");
+  const [showPremiumPrompt, setShowPremiumPrompt] = useState<boolean>(false);
   const [lastAnalyzePayload, setLastAnalyzePayload] = useState<{
     fileBase64: string | null;
     mimeType: string | null;
@@ -55,36 +53,24 @@ export default function App() {
     sectionTitle: "",
   });
 
-  // Check auth and load history on mount
+  // 1. Device-based Anonymous Auth Initialization (UUID)
   useEffect(() => {
-    // 1. Load cached user if present
     try {
-      const cachedUser = localStorage.getItem(AUTH_USER_KEY);
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-      if (cachedUser && token) {
-        setCurrentUser(JSON.parse(cachedUser));
-        // Verify with server in background
-        safeFetchJson<{ authenticated: boolean; user: any }>("/api/auth/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-          .then((data) => {
-            if (data?.authenticated && data?.user) {
-              setCurrentUser(data.user);
-              localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-            } else {
-              // Session expired
-              setCurrentUser(null);
-              localStorage.removeItem(AUTH_USER_KEY);
-              localStorage.removeItem(AUTH_TOKEN_KEY);
-            }
-          })
-          .catch(() => {});
+      let storedDeviceId = localStorage.getItem(DEVICE_ID_KEY);
+      if (!storedDeviceId) {
+        storedDeviceId = uuidv4();
+        localStorage.setItem(DEVICE_ID_KEY, storedDeviceId);
       }
+      setDeviceId(storedDeviceId);
     } catch (e) {
-      console.error("Auth load error:", e);
+      console.error("Failed to access localStorage for deviceId:", e);
+      const generated = uuidv4();
+      setDeviceId(generated);
     }
+  }, []);
 
-    // 2. Load analysis history
+  // 2. Load analysis history on mount
+  useEffect(() => {
     try {
       const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
       if (saved) {
@@ -95,35 +81,7 @@ export default function App() {
     }
   }, []);
 
-  const handleLoginSuccess = (user: AuthUser, token: string) => {
-    setCurrentUser(user);
-    try {
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-      localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } catch (e) {
-      console.error("Failed to store auth:", e);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      const token = localStorage.getItem(AUTH_TOKEN_KEY);
-      if (token) {
-        await fetch("/api/auth/logout", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      }
-    } catch (e) {
-      console.error("Logout request error:", e);
-    } finally {
-      setCurrentUser(null);
-      localStorage.removeItem(AUTH_USER_KEY);
-      localStorage.removeItem(AUTH_TOKEN_KEY);
-    }
-  };
-
-  // Handle scroll to top visibility
+  // 3. Handle scroll to top visibility
   useEffect(() => {
     const handleScroll = () => {
       setShowScrollTop(window.scrollY > 300);
@@ -164,21 +122,44 @@ export default function App() {
   ) => {
     setIsLoading(true);
     setError(null);
+    setShowPremiumPrompt(false);
     setCurrentFileName(fileName);
     setLastAnalyzePayload({ fileBase64, mimeType, rawText, fileName });
 
     try {
-      const json = await safeFetchJson<{ success: boolean; data: JudicialNoticeAnalysis; error?: string }>(
-        "/api/analyze",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileBase64, mimeType, rawText }),
+      // اطمینان از وجود شناسه دستگاه
+      let currentDeviceId = deviceId;
+      if (!currentDeviceId) {
+        try {
+          currentDeviceId = localStorage.getItem(DEVICE_ID_KEY) || uuidv4();
+          localStorage.setItem(DEVICE_ID_KEY, currentDeviceId);
+        } catch {
+          currentDeviceId = uuidv4();
         }
-      );
+        setDeviceId(currentDeviceId);
+      }
 
-      if (!json.success || !json.data) {
-        throw new Error(json.error || "خطا در تحلیل ابلاغیه قضایی توسط هوش مصنوعی");
+      // ارسال درخواست به همراه هدر x-device-id
+      const res = await fetch(getApiUrl("/api/analyze"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-device-id": currentDeviceId,
+        },
+        body: JSON.stringify({ fileBase64, mimeType, rawText }),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      // بررسی وضعیت ۴۰۳ و اتمام توکن‌های رایگان (LIMIT_REACHED)
+      if (res.status === 403 && json?.error === "LIMIT_REACHED") {
+        setShowPremiumPrompt(true);
+        setError(null);
+        return;
+      }
+
+      if (!res.ok || !json?.success || !json?.data) {
+        throw new Error(json?.message || json?.error || `خطا در تحلیل ابلاغیه قضایی (${res.status})`);
       }
 
       const analysisData: JudicialNoticeAnalysis = json.data;
@@ -186,10 +167,10 @@ export default function App() {
       saveToHistory(analysisData, fileName);
       setLastAnalyzePayload(null);
 
-      // Scroll to result view
+      // انتقال به ابتدای صفحه جهت مشاهده تحلیل
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err: any) {
-      console.error(err);
+      console.error("Analyze error:", err);
       setError(err.message || "متأسفانه در تحلیل ابلاغیه خطایی رخ داد. لطفاً مجدداً امتحان کنید.");
     } finally {
       setIsLoading(false);
@@ -207,8 +188,13 @@ export default function App() {
     }
   };
 
+  const handleBuyPremium = () => {
+    alert("به زودی: اتصال به درگاه پرداخت جهت فعال‌سازی حساب نامحدود پرمیوم برای این دستگاه.");
+  };
+
   const handleSelectSample = (sample: SampleNotice) => {
     setError(null);
+    setShowPremiumPrompt(false);
     setCurrentFileName(sample.name);
     setCurrentAnalysis(sample.precomputedAnalysis);
     saveToHistory(sample.precomputedAnalysis, sample.name);
@@ -219,6 +205,7 @@ export default function App() {
     setCurrentAnalysis(null);
     setCurrentFileName("");
     setError(null);
+    setShowPremiumPrompt(false);
     setActiveSectionContext(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -226,6 +213,7 @@ export default function App() {
   const handleSelectHistoryItem = (item: AnalysisHistoryItem) => {
     setCurrentAnalysis(item.analysis);
     setCurrentFileName(item.fileName);
+    setShowPremiumPrompt(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -300,9 +288,6 @@ export default function App() {
       <Header
         onOpenHistory={() => setIsHistoryOpen(true)}
         onOpenPrivacy={() => setIsPrivacyOpen(true)}
-        onOpenAuth={() => setIsAuthModalOpen(true)}
-        currentUser={currentUser}
-        onLogout={handleLogout}
         historyCount={history.length}
         onReset={handleReset}
         hasActiveResult={!!currentAnalysis}
@@ -310,6 +295,7 @@ export default function App() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        {/* پیام خطای پردازش هوش مصنوعی */}
         {error && (
           <div className="max-w-4xl mx-auto mb-6 p-4 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
             <div className="flex items-start gap-3">
@@ -332,6 +318,53 @@ export default function App() {
           </div>
         )}
 
+        {/* کارت اعلان پایان توکن‌های رایگان (در بالای صفحه بارگذاری) */}
+        {showPremiumPrompt && (
+          <div
+            id="banner-limit-reached"
+            className="max-w-4xl mx-auto mb-6 p-5 sm:p-6 bg-gradient-to-r from-[#FAF6EC] to-[#F5EEDC] border border-[#E5DBBF] rounded-2xl sm:rounded-3xl shadow-xs text-right animate-in fade-in"
+          >
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-[#8F7732] text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                  <Crown className="w-6 h-6 text-[#FFF5D0]" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base sm:text-lg font-bold text-[#4A4844]">
+                      پایان سقف تحلیل‌های رایگان (۳ ابلاغیه)
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-md bg-[#8F7732]/10 text-[#8F7732] text-[11px] font-bold">
+                      دستگاه جاری
+                    </span>
+                  </div>
+                  <p className="text-xs sm:text-sm text-[#6E5D2A] leading-relaxed max-w-2xl">
+                    شما از ۳ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها، تنظیم پیش‌نویس لوایح و مشورت نامحدود با دستیار حقوقی، نسخه پرمیوم را فعال فرمایید.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2.5 w-full sm:w-auto pt-2 sm:pt-0">
+                <button
+                  id="btn-buy-premium-banner"
+                  onClick={handleBuyPremium}
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#8F7732] hover:bg-[#776326] text-white font-bold text-xs sm:text-sm transition-all shadow-xs cursor-pointer shrink-0"
+                >
+                  <Sparkles className="w-4 h-4 text-[#FFF2B2]" />
+                  <span>خرید نسخه پرمیوم</span>
+                </button>
+                <button
+                  onClick={() => setShowPremiumPrompt(false)}
+                  className="p-2.5 rounded-xl text-[#8F7732] hover:bg-[#EBE3CD] transition-colors cursor-pointer"
+                  title="بستن پیام"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {!currentAnalysis ? (
           <UploadZone
             onAnalyze={handleAnalyze}
@@ -346,7 +379,6 @@ export default function App() {
               onAskSectionQuestion={handleAskSectionQuestion}
               onOpenClauseModal={handleOpenClauseModal}
               onOpenDefenseDraft={() => setIsDefenseDraftOpen(true)}
-              currentUser={currentUser}
             />
 
             {/* AI Legal Assistant Chat */}
@@ -405,13 +437,6 @@ export default function App() {
         onClose={() => setIsPrivacyOpen(false)}
       />
 
-      {/* Phone Auth Modal (Kavenegar OTP) */}
-      <PhoneAuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onLoginSuccess={handleLoginSuccess}
-      />
-
       {/* Clause Inquiry Modal */}
       <ClauseInquiryModal
         isOpen={clauseModalState.isOpen}
@@ -429,7 +454,6 @@ export default function App() {
           isOpen={isDefenseDraftOpen}
           onClose={() => setIsDefenseDraftOpen(false)}
           analysis={currentAnalysis}
-          currentUser={currentUser}
         />
       )}
 

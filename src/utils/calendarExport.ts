@@ -112,7 +112,7 @@ function escapeICS(str: string): string {
 /**
  * Calculates target deadline date based on analysis
  */
-function calculateTargetDate(analysis: JudicialNoticeAnalysis): Date {
+export function calculateTargetDate(analysis: JudicialNoticeAnalysis): Date {
   const noticeDate = parseDateToGregorian(analysis.caseDetails.noticeDate);
   const days = analysis.deadlines.durationDays || 5;
 

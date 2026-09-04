@@ -28,9 +28,11 @@ import {
   CalendarPlus,
   Download,
   ExternalLink,
+  Bell,
 } from "lucide-react";
 import { JudicialNoticeAnalysis, LegalActionItem, AuthUser } from "../types";
 import { downloadICSFile, getGoogleCalendarLink } from "../utils/calendarExport";
+import { AttendanceReminderCard } from "./AttendanceReminderCard";
 
 interface AnalysisResultProps {
   analysis: JudicialNoticeAnalysis;
@@ -160,15 +162,18 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
             </button>
           )}
 
-          {/* Export to Calendar (ICS) */}
+          {/* Quick Jump to Attendance Reminder */}
           <button
-            id="btn-export-ics-top"
-            onClick={() => downloadICSFile(analysis)}
-            title="دانلود فایل تقویم ICS برای ذخیره موعد در تقویم گوشی یا اوت‌لوک"
+            id="btn-goto-reminder-top"
+            onClick={() => {
+              const el = document.getElementById("attendance-reminder-section");
+              el?.scrollIntoView({ behavior: "smooth" });
+            }}
+            title="فعال‌سازی یادآور زمان حضور (اطلاع‌رسانی ۲ روز قبل)"
             className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-[#8F7732] hover:text-[#6E5D2A] bg-[#FAF6EC] hover:bg-[#F4EEDC] border border-[#EBE4CF] rounded-xl transition-colors cursor-pointer"
           >
-            <CalendarPlus className="w-3.5 h-3.5 text-[#8F7732]" />
-            <span className="truncate">افزودن به تقویم (.ICS)</span>
+            <Bell className="w-3.5 h-3.5 text-[#8F7732]" />
+            <span className="truncate">یادآور ۲ روز قبل</span>
           </button>
 
           {onOpenClauseModal && (
@@ -393,50 +398,9 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
             </p>
           </div>
 
-          {/* Calendar Sync & ICS Export Box */}
-          <div className="mt-4 p-3.5 sm:p-4 rounded-xl sm:rounded-2xl bg-white border border-[#EBE4CF] shadow-2xs space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-[#FAF6EC] text-[#8F7732] flex items-center justify-center shrink-0">
-                  <Calendar className="w-4 h-4" />
-                </div>
-                <div>
-                  <h5 className="text-xs font-bold text-[#4A4844]">
-                    ثبت خودکار یادآور مهلت قانونی در تقویم (Reminder)
-                  </h5>
-                  <p className="text-[11px] text-[#7A7874]">
-                    تنظیم آلارم برای ۲ روز و ۱ روز قبل از انقضای مهلت ابلاغیه
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1 sm:pt-0">
-                <button
-                  type="button"
-                  id="btn-download-ics"
-                  onClick={() => downloadICSFile(analysis)}
-                  className="px-3 py-2 rounded-xl bg-[#FAF6EC] hover:bg-[#F4EEDC] text-[#8F7732] border border-[#EBE4CF] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>دانلود فایل تقویم (ICS)</span>
-                </button>
-
-                <a
-                  id="link-google-calendar"
-                  href={getGoogleCalendarLink(analysis)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-2 rounded-xl bg-[#7A8C70] hover:bg-[#68795F] text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                >
-                  <CalendarPlus className="w-3.5 h-3.5" />
-                  <span>افزودن به گوگل کلندر</span>
-                  <ExternalLink className="w-3 h-3 opacity-80" />
-                </a>
-              </div>
-            </div>
-            <p className="text-[10px] text-[#8C8982] leading-relaxed border-t border-[#F5F2EB] pt-2">
-              💡 فایل <strong>.ics</strong> با تقویم موبایل (iOS Calendar، Samsung، تقویم فارسی و Google) سازگار است.
-            </p>
+          {/* Attendance Reminder Section (اطلاع‌رسانی ۲ روز قبل از موعد حضور) */}
+          <div className="mt-5">
+            <AttendanceReminderCard analysis={analysis} />
           </div>
         </div>
       </div>

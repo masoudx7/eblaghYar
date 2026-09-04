@@ -8,7 +8,6 @@ import {
   Sparkles,
   CheckCircle2,
   AlertCircle,
-  Clock,
   Loader2,
   ShieldCheck,
   EyeOff,
@@ -16,17 +15,16 @@ import {
   Scale,
   SunMedium,
 } from "lucide-react";
-import { SAMPLE_NOTICES, SampleNotice } from "../sampleData";
+import type { SampleNotice } from "../sampleData";
 
 interface UploadZoneProps {
   onAnalyze: (fileBase64: string | null, mimeType: string | null, rawText: string | null, fileName: string) => void;
-  onSelectSample: (sample: SampleNotice) => void;
+  onSelectSample?: (sample: SampleNotice) => void;
   isLoading: boolean;
 }
 
 export const UploadZone: React.FC<UploadZoneProps> = ({
   onAnalyze,
-  onSelectSample,
   isLoading,
 }) => {
   const [activeTab, setActiveTab] = useState<"file" | "text">("file");
@@ -513,48 +511,6 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
               )}
             </button>
           </div>
-        </div>
-      </div>
-
-      {/* Quick Sample Selector */}
-      <div className="bg-[#F9F7F2] border border-[#E5E2D9] rounded-3xl p-5 sm:p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-[#7A8C70]" />
-            <h3 className="text-sm font-bold text-[#4A4844]">
-              آزمایش سریع با نمونه‌های واقعی ابلاغیه‌های ثنا:
-            </h3>
-          </div>
-          <span className="text-xs text-[#7A7874]">برای تست کلیک کنید</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-          {SAMPLE_NOTICES.map((sample) => (
-            <button
-              key={sample.id}
-              id={`sample-btn-${sample.id}`}
-              onClick={() => onSelectSample(sample)}
-              className="text-right p-4 bg-white hover:bg-[#F0F4EF]/70 border border-[#E5E2D9] hover:border-[#7A8C70] rounded-2xl transition-all shadow-xs group flex flex-col justify-between cursor-pointer"
-            >
-              <div>
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs font-bold text-[#3D3B38] group-hover:text-[#5A6D52]">
-                    {sample.name}
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#FAF8F5] text-[#5C5A55] border border-[#E5E2D9]">
-                    {sample.badge}
-                  </span>
-                </div>
-                <p className="text-xs text-[#5C5A55] leading-relaxed line-clamp-2">
-                  {sample.description}
-                </p>
-              </div>
-              <div className="mt-3 text-[11px] text-[#5A6D52] font-semibold flex items-center gap-1">
-                <span>مشاهده تحلیل فوری</span>
-                <ArrowLeft className="w-3 h-3 group-hover:-translate-x-1 transition-transform" />
-              </div>
-            </button>
-          ))}
         </div>
       </div>
     </div>

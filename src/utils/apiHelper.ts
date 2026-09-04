@@ -5,14 +5,26 @@
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export const DEFAULT_API_BASE = "https://eblagh-yar.vercel.app";
+
+export function getApiUrl(input: RequestInfo | URL): RequestInfo | URL {
+  if (typeof input === "string" && input.startsWith("/api")) {
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE;
+    const cleanBase = baseUrl.replace(/\/+$/, "");
+    return `${cleanBase}${input}`;
+  }
+  return input;
+}
+
 export async function safeFetchJson<T = any>(
   input: RequestInfo | URL,
   init?: RequestInit,
   retriesLeft = 2
 ): Promise<T> {
+  const resolvedInput = getApiUrl(input);
   let res: Response;
   try {
-    res = await fetch(input, init);
+    res = await fetch(resolvedInput, init);
   } catch (networkErr: any) {
     if (retriesLeft > 0) {
       await sleep(1500);
