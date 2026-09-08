@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
+import { Capacitor } from "@capacitor/core";
+import { SplashScreen } from "@capacitor/splash-screen";
+import { StatusBar, Style } from "@capacitor/status-bar";
+import { App as CapApp } from "@capacitor/app";
 import { Header } from "./components/Header";
 import { UploadZone } from "./components/UploadZone";
 import { AnalysisResult } from "./components/AnalysisResult";
@@ -68,6 +72,45 @@ export default function App() {
       setDeviceId(generated);
     }
   }, []);
+
+  // 1.1 Capacitor native platform initialization (StatusBar, SplashScreen, BackButton)
+  useEffect(() => {
+    let backListener: any = null;
+    if (Capacitor.isNativePlatform()) {
+      SplashScreen.hide().catch(() => {});
+      StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
+      StatusBar.setBackgroundColor({ color: "#1e3a8a" }).catch(() => {});
+
+      CapApp.addListener("backButton", () => {
+        if (isHistoryOpen) {
+          setIsHistoryOpen(false);
+        } else if (isPrivacyOpen) {
+          setIsPrivacyOpen(false);
+        } else if (isDefenseDraftOpen) {
+          setIsDefenseDraftOpen(false);
+        } else if (clauseModalState.isOpen) {
+          setClauseModalState((prev) => ({ ...prev, isOpen: false }));
+        } else if (currentAnalysis) {
+          if (window.confirm("آیا می‌خواهید از تحلیل فعلی خارج شوید؟")) {
+            setCurrentAnalysis(null);
+            setCurrentFileName("");
+          }
+        } else {
+          if (window.confirm("آیا می‌خواهید از برنامه خارج شوید؟")) {
+            CapApp.exitApp();
+          }
+        }
+      }).then((listener) => {
+        backListener = listener;
+      }).catch(() => {});
+
+      return () => {
+        if (backListener && typeof backListener.remove === "function") {
+          backListener.remove();
+        }
+      };
+    }
+  }, [isHistoryOpen, isPrivacyOpen, isDefenseDraftOpen, clauseModalState.isOpen, currentAnalysis]);
 
   // 2. Load analysis history on mount
   useEffect(() => {
