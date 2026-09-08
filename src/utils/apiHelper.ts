@@ -5,13 +5,26 @@
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export const DEFAULT_API_BASE = "https://eblagh-yar.vercel.app";
-
 export function getApiUrl(input: RequestInfo | URL): RequestInfo | URL {
   if (typeof input === "string" && input.startsWith("/api")) {
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE;
-    const cleanBase = baseUrl.replace(/\/+$/, "");
-    return `${cleanBase}${input}`;
+    const customBase = import.meta.env.VITE_API_BASE_URL;
+    if (customBase) {
+      const cleanBase = customBase.replace(/\/+$/, "");
+      return `${cleanBase}${input}`;
+    }
+
+    // In Capacitor native mobile environment, use production backend
+    const isCapacitor =
+      typeof window !== "undefined" &&
+      typeof (window as any)?.Capacitor?.isNativePlatform === "function" &&
+      (window as any)?.Capacitor?.isNativePlatform();
+
+    if (isCapacitor) {
+      return `https://eblagh-yar.vercel.app${input}`;
+    }
+
+    // In web browser (dev server, preview, or production domain), use relative path
+    return input;
   }
   return input;
 }
