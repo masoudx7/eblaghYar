@@ -12,6 +12,7 @@ import { HistoryDrawer } from "./components/HistoryDrawer";
 import { PrivacyNoticeModal } from "./components/PrivacyNoticeModal";
 import { ClauseInquiryModal } from "./components/ClauseInquiryModal";
 import { DefenseDraftModal } from "./components/DefenseDraftModal";
+import { CoinPurchaseModal } from "./components/CoinPurchaseModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
@@ -30,6 +31,32 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string>("");
+  const [freeTokens, setFreeTokens] = useState<number>(2);
+  const [isPremium, setIsPremium] = useState<boolean>(false);
+  const [isCoinModalOpen, setIsCoinModalOpen] = useState<boolean>(false);
+
+  const fetchDeviceStatus = async (devId: string) => {
+    try {
+      const res = await fetch(getApiUrl("/api/device-status"), {
+        headers: {
+          "x-device-id": devId,
+        },
+      });
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        if (typeof data.free_tokens === "number") setFreeTokens(data.free_tokens);
+        if (typeof data.is_premium === "boolean") setIsPremium(data.is_premium);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch device status:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (deviceId) {
+      fetchDeviceStatus(deviceId);
+    }
+  }, [deviceId]);
   const [showPremiumPrompt, setShowPremiumPrompt] = useState<boolean>(false);
   const [lastAnalyzePayload, setLastAnalyzePayload] = useState<{
     fileBase64: string | null;
@@ -209,6 +236,7 @@ export default function App() {
       setCurrentAnalysis(analysisData);
       saveToHistory(analysisData, fileName);
       setLastAnalyzePayload(null);
+      await fetchDeviceStatus(currentDeviceId);
 
       // انتقال به ابتدای صفحه جهت مشاهده تحلیل
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -232,7 +260,7 @@ export default function App() {
   };
 
   const handleBuyPremium = () => {
-    alert("به زودی: اتصال به درگاه پرداخت جهت فعال‌سازی حساب نامحدود پرمیوم برای این دستگاه.");
+    setIsCoinModalOpen(true);
   };
 
   const handleSelectSample = (sample: SampleNotice) => {
@@ -334,6 +362,9 @@ export default function App() {
         historyCount={history.length}
         onReset={handleReset}
         hasActiveResult={!!currentAnalysis}
+        freeTokens={freeTokens}
+        isPremium={isPremium}
+        onOpenCoinModal={() => setIsCoinModalOpen(true)}
       />
 
       {/* Main Container */}
@@ -375,14 +406,14 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <h3 className="text-base sm:text-lg font-bold text-[#4A4844]">
-                      پایان سقف تحلیل‌های رایگان (۳ ابلاغیه)
+                      پایان سقف تحلیل‌های رایگان (۲ ابلاغیه)
                     </h3>
                     <span className="px-2 py-0.5 rounded-md bg-[#8F7732]/10 text-[#8F7732] text-[11px] font-bold">
                       دستگاه جاری
                     </span>
                   </div>
                   <p className="text-xs sm:text-sm text-[#6E5D2A] leading-relaxed max-w-2xl">
-                    شما از ۳ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها، تنظیم پیش‌نویس لوایح و مشورت نامحدود با دستیار حقوقی، نسخه پرمیوم را فعال فرمایید.
+                    شما از ۲ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها، تنظیم پیش‌نویس لوایح و مشورت نامحدود با دستیار حقوقی، نسخه پرمیوم را فعال فرمایید.
                   </p>
                 </div>
               </div>
@@ -478,6 +509,19 @@ export default function App() {
       <PrivacyNoticeModal
         isOpen={isPrivacyOpen}
         onClose={() => setIsPrivacyOpen(false)}
+      />
+      {/* Coin Purchase Modal */}
+      <CoinPurchaseModal
+        isOpen={isCoinModalOpen}
+        onClose={() => setIsCoinModalOpen(false)}
+        deviceId={deviceId}
+        isPremium={isPremium}
+        freeTokens={freeTokens}
+        onSuccessUpdate={(tokens, premium) => {
+          setFreeTokens(tokens);
+          setIsPremium(premium);
+          setShowPremiumPrompt(false);
+        }}
       />
 
       {/* Clause Inquiry Modal */}

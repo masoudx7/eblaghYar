@@ -37,7 +37,7 @@ function getInMemoryDevice(deviceId: string): DeviceRecord {
     record = {
       device_id: deviceId,
       is_premium: false,
-      free_tokens: 3,
+      free_tokens: 2,
       created_at: new Date().toISOString(),
     };
     inMemoryDevices.set(deviceId, record);
@@ -129,12 +129,12 @@ export const checkDeviceAccess = async (
         } else if (existingDevice) {
           device = existingDevice as DeviceRecord;
         } else {
-          // اگر وجود نداشت، یک رکورد جدید با free_tokens: 3 و is_premium: false بسازد
+          // اگر وجود نداشت، یک رکورد جدید با free_tokens: 2 و is_premium: false بسازد
           const { data: newDevice, error: insertError } = await supabase
             .from("devices")
             .insert({
               device_id: deviceId,
-              free_tokens: 3,
+              free_tokens: 2,
               is_premium: false,
             })
             .select()
@@ -165,7 +165,7 @@ export const checkDeviceAccess = async (
         success: false,
         error: "LIMIT_REACHED",
         message:
-          "سقف استفاده رایگان شما (۳ تحلیل ابلاغیه) به پایان رسیده است. لطفاً جهت ادامه، نسخه پرمیوم را فعال فرمایید.",
+          "سقف استفاده رایگان شما (۲ تحلیل ابلاغیه) به پایان رسیده است. لطفاً جهت ادامه، نسخه پرمیوم را فعال فرمایید.",
       });
     }
 
@@ -392,6 +392,8 @@ apiRouter.post("/analyze", checkDeviceAccess, async (req, res) => {
     const promptText = `
 لطفاً این ابلاغیه / سند قضایی را به صورت کامل و دقیق بخوانید و تحلیل حقوقی آن را در قالب ساختار JSON خواسته شده با زبان فارسی روان و ساده استخراج کنید.
 
+مهم: حتماً بررسی کنید که آیا سند یا متن ارسالی کاربر واقعاً یک ابلاغیه قضایی، اخطاریه، احضاریه، رأی، دادنامه، شکواییه یا سند حقوقی/قضایی است یا خیر. اگر سند نامربوط است (مثل عکس شخصی، تصویر غذا، متن غیرقضایی، سوال متفرقه و غیره)، مقدار isRelevant را برابر false قرار داده و در rejectionReason دلیل آن را به وضوح ذکر کنید (مثلاً: «این تصویر/متن ارتباطی با ابلاغیه‌ها یا اسناد قضایی ندارد و قابل تحلیل نیست.»).
+
 ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
 
 اطمینان حاصل کنید که تمام بخش‌ها به طور کامل، دقیق و قابل فهم برای یک فرد غیرحقوقی پر شوند.
@@ -408,6 +410,14 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
         responseSchema: {
           type: Type.OBJECT,
           properties: {
+            isRelevant: {
+              type: Type.BOOLEAN,
+              description: "آیا این فایل یا متن ارسالی یک ابلاغیه، اخطاریه، احضاریه، رای، شکواییه، دادخواست یا سند قضایی / حقوقی مرتبط است؟ (اگر تصویر یا متن نامربوط است، مقدار آن را false قرار دهید)",
+            },
+            rejectionReason: {
+              type: Type.STRING,
+              description: "اگر isRelevant برابر false است، دلیل آن را به کاربر توضیح دهید (مثلاً: این تصویر یا متن ارتباطی با ابلاغیه‌ها یا اسناد قضایی ندارد).",
+            },
             title: {
               type: Type.STRING,
               description: "عنوان خلاصه و گویای ابلاغیه (مثلاً: احضاریه شعبه ۲ بازپرسی جهت اخذ توضیح)",
@@ -535,11 +545,19 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
 
     const parsedData = cleanAndParseJSON(responseText);
 
+    if (parsedData.isRelevant === false) {
+      return res.status(400).json({
+        success: false,
+        error: "IRRELEVANT_CONTENT",
+        message: parsedData.rejectionReason || "متن یا تصویر ارسالی مرتبط با ابلاغیه‌ها، اخطاریه‌ها یا اسناد قضایی نیست. لطفاً تصویر ابلاغیه سامانه ثنا، دادنامه یا اخطاریه قضایی معتبر را ارسال کنید.",
+      });
+    }
+
     // اگر کاربر پرمیوم نبود، پس از موفقیت‌آمیز بودن پاسخ AI، یک واحد از free_tokens دستگاه کم کند و یک رکورد در usage_logs ثبت نماید
     if (req.device && !req.device.is_premium && req.deviceId) {
       try {
         const devId = req.deviceId;
-        const currentTokens = typeof req.device.free_tokens === "number" ? req.device.free_tokens : 3;
+        const currentTokens = typeof req.device.free_tokens === "number" ? req.device.free_tokens : 2;
         const remainingTokens = Math.max(0, currentTokens - 1);
         req.device.free_tokens = remainingTokens;
 
@@ -592,6 +610,87 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
       error: isUnavailable
         ? "سرویس هوش مصنوعی در حال حاضر با ترافیک بالایی روبرو است. لطفاً چند لحظه دیگر روی دکمه «تلاش مجدد» کلیک کنید."
         : error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+    });
+  }
+});
+
+// 1.5. Device Status Endpoint
+apiRouter.get("/device-status", async (req, res) => {
+  try {
+    const rawDeviceId = req.headers["x-device-id"];
+    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.trim();
+
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        error: "MISSING_DEVICE_ID",
+        message: "شناسه دستگاه (deviceId) الزامی است.",
+      });
+    }
+
+    const supabase = getSupabaseClient();
+    let device: DeviceRecord | null = null;
+    let usedFallback = false;
+
+    if (supabase) {
+      try {
+        const { data: existingDevice, error: selectError } = await supabase
+          .from("devices")
+          .select("*")
+          .eq("device_id", deviceId)
+          .maybeSingle();
+
+        if (selectError) {
+          if (
+            selectError.code === "PGRST205" ||
+            selectError.code === "42P01" ||
+            selectError.message?.includes("schema cache") ||
+            selectError.message?.includes("does not exist")
+          ) {
+            usedFallback = true;
+          } else if (selectError.code !== "PGRST116") {
+            usedFallback = true;
+          }
+        } else if (existingDevice) {
+          device = existingDevice as DeviceRecord;
+        } else {
+          const { data: newDevice, error: insertError } = await supabase
+            .from("devices")
+            .insert({
+              device_id: deviceId,
+              free_tokens: 2,
+              is_premium: false,
+            })
+            .select()
+            .maybeSingle();
+
+          if (insertError || !newDevice) {
+            usedFallback = true;
+          } else {
+            device = newDevice as DeviceRecord;
+          }
+        }
+      } catch (dbErr) {
+        usedFallback = true;
+      }
+    } else {
+      usedFallback = true;
+    }
+
+    if (usedFallback || !device) {
+      device = getInMemoryDevice(deviceId);
+    }
+
+    return res.json({
+      success: true,
+      free_tokens: device.free_tokens ?? 2,
+      is_premium: device.is_premium ?? false,
+    });
+  } catch (err: any) {
+    console.error("device-status error:", err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Failed to fetch device status",
     });
   }
 });
@@ -649,6 +748,77 @@ apiRouter.post("/activate-premium", async (req, res) => {
       success: false,
       error: "SERVER_ERROR",
       message: err?.message || "خطای سرور در فعال‌سازی نسخه پرمیوم.",
+    });
+  }
+});
+
+// 2.5. Buy Coins Endpoint
+apiRouter.post("/buy-coins", async (req, res) => {
+  try {
+    const { deviceId, coinCount } = req.body || {};
+    const count = parseInt(coinCount, 10) || 5;
+
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        error: "MISSING_DEVICE_ID",
+        message: "شناسه دستگاه (deviceId) الزامی است.",
+      });
+    }
+
+    const memDevice = getInMemoryDevice(deviceId);
+    const currentTokens = typeof memDevice.free_tokens === "number" ? memDevice.free_tokens : 2;
+    const newTokens = currentTokens + count;
+    memDevice.free_tokens = newTokens;
+
+    let savedData: any = memDevice;
+
+    try {
+      const supabase = getSupabaseClient();
+      if (supabase) {
+        // First get existing or upsert
+        const { data: existing } = await supabase
+          .from("devices")
+          .select("free_tokens")
+          .eq("device_id", deviceId)
+          .maybeSingle();
+
+        const baseTokens = existing && typeof existing.free_tokens === "number" ? existing.free_tokens : currentTokens;
+        const updatedTokens = baseTokens + count;
+
+        const { data, error } = await supabase
+          .from("devices")
+          .upsert(
+            {
+              device_id: deviceId,
+              free_tokens: updatedTokens,
+            },
+            { onConflict: "device_id" }
+          )
+          .select()
+          .maybeSingle();
+
+        if (!error && data) {
+          savedData = data;
+          memDevice.free_tokens = data.free_tokens;
+        }
+      }
+    } catch (dbErr) {
+      console.warn("Supabase upsert failed during buy-coins, using memory state:", dbErr);
+    }
+
+    return res.json({
+      success: true,
+      message: `${count} سکه با موفقیت به حساب شما اضافه شد.`,
+      free_tokens: memDevice.free_tokens,
+      device: savedData,
+    });
+  } catch (err: any) {
+    console.error("buy-coins error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "SERVER_ERROR",
+      message: err?.message || "خطای سرور در خرید سکه.",
     });
   }
 });

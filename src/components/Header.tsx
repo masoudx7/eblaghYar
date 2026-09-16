@@ -4,6 +4,8 @@ import {
   ShieldCheck,
   History,
   FileText,
+  Coins,
+  Crown,
 } from "lucide-react";
 
 interface HeaderProps {
@@ -12,6 +14,9 @@ interface HeaderProps {
   historyCount: number;
   onReset: () => void;
   hasActiveResult: boolean;
+  freeTokens: number;
+  isPremium: boolean;
+  onOpenCoinModal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,6 +25,9 @@ export const Header: React.FC<HeaderProps> = ({
   historyCount,
   onReset,
   hasActiveResult,
+  freeTokens,
+  isPremium,
+  onOpenCoinModal,
 }) => {
   const toPersianDigits = (str: string | number) => {
     const persian = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
@@ -53,8 +61,34 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {/* Actions & Coin Token Badge */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Coin Token Badge */}
+          <div 
+            id="token-coin-badge"
+            onClick={onOpenCoinModal}
+            className="flex items-center gap-1.5 bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200/80 px-2.5 sm:px-3 py-1 rounded-full shadow-xs cursor-pointer hover:bg-amber-100/70 transition-all group"
+            title={isPremium ? "حساب پرمیوم نامحدود فعال است (کلیک برای خرید سکه)" : `${freeTokens} تحلیل رایگان باقیمانده (کلیک برای خرید سکه و ارتقا)`}
+          >
+            <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-gradient-to-tr from-amber-500 via-yellow-400 to-amber-300 flex items-center justify-center text-white shadow-xs shrink-0 ring-2 ring-amber-100 group-hover:scale-105 transition-transform">
+              {isPremium ? (
+                <Crown className="w-3 h-3 text-amber-950" />
+              ) : (
+                <Coins className="w-3 h-3 text-amber-950" />
+              )}
+            </div>
+            <div className="text-xs font-extrabold text-amber-950 flex items-center gap-1">
+              {isPremium ? (
+                <span className="text-[11px] sm:text-xs text-amber-800 font-black">پریمیوم</span>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <span className="text-sm font-black text-amber-900">{toPersianDigits(freeTokens)}</span>
+                  <span className="text-[10px] sm:text-xs text-amber-700/80 font-semibold hidden sm:inline">سکه</span>
+                </div>
+              )}
+            </div>
+          </div>
+
           {hasActiveResult && (
             <button
               id="new-analysis-btn"
@@ -67,8 +101,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="sm:hidden text-[11px]">جدید</span>
             </button>
           )}
-
-
 
           <button
             id="history-btn"
@@ -99,4 +131,3 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
-
