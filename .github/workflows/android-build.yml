@@ -28,11 +28,12 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK Base
+      - name: Setup Android SDK Base (No auto-install)
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''  # این خط جادویی است که از نصب tools جلوگیری می‌کند
 
-      - name: Accept Licenses and Install SDK Packages
-        # این مرحله جادویی است که مشکل exit code 1 را حل می‌کند
+      - name: Accept Licenses and Install SDK Packages Manually
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
