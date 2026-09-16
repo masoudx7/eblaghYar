@@ -20,7 +20,6 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        # اضافه کردن legacy-peer-deps برای جلوگیری از خطای تداخل پکیج‌ها در سرور گیت‌هاب
         run: npm install --legacy-peer-deps
 
       - name: Setup Java
@@ -29,19 +28,19 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Setup Android SDK Base
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+
+      - name: Accept Licenses and Install SDK Packages
+        # این مرحله جادویی است که مشکل exit code 1 را حل می‌کند
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Build Web Assets (Frontend)
         run: npm run build
 
       - name: Sync Capacitor
-        # نکته مهم: دستور add android حذف شد چون پوشه از قبل در ریپازیتوری وجود دارد
         run: npx cap sync android
 
       - name: Build Debug APK
