@@ -20,7 +20,8 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        # اضافه کردن legacy-peer-deps برای جلوگیری از خطای تداخل پکیج‌ها در سرور گیت‌هاب
+        run: npm install --legacy-peer-deps
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -28,7 +29,7 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK (Fixed: Removed obsolete 'tools' package)
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
           packages: |
@@ -39,10 +40,8 @@ jobs:
       - name: Build Web Assets (Frontend)
         run: npm run build
 
-      - name: Add Android Platform (Only if not committed to repo)
-        run: npx cap add android
-
       - name: Sync Capacitor
+        # نکته مهم: دستور add android حذف شد چون پوشه از قبل در ریپازیتوری وجود دارد
         run: npx cap sync android
 
       - name: Build Debug APK
