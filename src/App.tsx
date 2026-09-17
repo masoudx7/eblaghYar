@@ -58,6 +58,7 @@ export default function App() {
     }
   }, [deviceId]);
   const [showPremiumPrompt, setShowPremiumPrompt] = useState<boolean>(false);
+  const [dismissedLowTokenWarning, setDismissedLowTokenWarning] = useState<boolean>(false);
   const [lastAnalyzePayload, setLastAnalyzePayload] = useState<{
     fileBase64: string | null;
     mimeType: string | null;
@@ -289,11 +290,16 @@ export default function App() {
   };
 
   const handleClearHistory = () => {
-    setHistory([]);
-    try {
-      localStorage.removeItem(HISTORY_STORAGE_KEY);
-    } catch (e) {
-      console.error(e);
+    const confirmed = window.confirm(
+      "آیا مطمئن هستید که می‌خواهید تمام تاریخچه تحلیل‌های خود را پاک کنید؟\n\n(توجه: موجودی سکه و اشتراک پرمیوم شما دست‌نخورده باقی خواهد ماند و این عمل فقط سوابق ذخیره‌شده روی مرورگر را پاک می‌کند.)"
+    );
+    if (confirmed) {
+      setHistory([]);
+      try {
+        localStorage.removeItem(HISTORY_STORAGE_KEY);
+      } catch (e) {
+        console.error(e);
+      }
     }
   };
 
@@ -389,6 +395,49 @@ export default function App() {
                 <span>تلاش مجدد</span>
               </button>
             )}
+          </div>
+        )}
+
+        {/* هشدار ملایم اتمام رو به پایان توکن‌ها (وقتی زیر ۵ سکه مانده باشد) */}
+        {!isPremium && freeTokens > 0 && freeTokens < 5 && !dismissedLowTokenWarning && !showPremiumPrompt && (
+          <div
+            id="banner-low-tokens"
+            className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-gradient-to-r from-amber-50/90 to-yellow-50/90 border border-amber-200 rounded-2xl shadow-xs text-right animate-in fade-in flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                <Sparkles className="w-5 h-5 text-amber-100" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-amber-950 text-sm sm:text-base">
+                    اعتبار رو به پایان است ({freeTokens} تحلیل باقی‌مانده)
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-200/60 text-amber-900 text-[10px] font-extrabold">
+                    رو به اتمام
+                  </span>
+                </div>
+                <p className="text-xs text-amber-800/90 mt-0.5 leading-relaxed">
+                  تعداد تحلیل‌های رایگان شما در این دستگاه رو به اتمام است. برای جلوگیری از توقف، می‌توانید سکه یا اشتراک پرمیوم تهیه کنید.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+              <button
+                onClick={() => setIsCoinModalOpen(true)}
+                className="flex-1 sm:flex-none px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Crown className="w-3.5 h-3.5" />
+                <span>افزایش سکه و پرمیوم</span>
+              </button>
+              <button
+                onClick={() => setDismissedLowTokenWarning(true)}
+                className="p-2 text-amber-800 hover:bg-amber-100/80 rounded-xl transition-colors cursor-pointer"
+                title="بستن موقت"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
 
