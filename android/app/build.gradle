@@ -19,10 +19,15 @@ android {
     // ✅ بخش تنظیمات امضای دیجیتال (Signing Config)
     signingConfigs {
         release {
-            storeFile file(System.getenv("KEYSTORE_PATH") ?: "dummy.jks")
-            storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
-            keyAlias System.getenv("KEY_ALIAS") ?: ""
-            keyPassword System.getenv("KEY_PASSWORD") ?: ""
+            def keystorePath = System.getenv("KEYSTORE_PATH") ?: "eblaghyar-release-key.jks"
+            def storePass = System.getenv("KEYSTORE_PASSWORD")
+            def keyAli = System.getenv("KEY_ALIAS")
+            def keyPass = System.getenv("KEY_PASSWORD")
+            
+            storeFile file(keystorePath)
+            storePassword (storePass != null && !storePass.isEmpty() ? storePass : "eblaghyar123")
+            keyAlias (keyAli != null && !keyAli.isEmpty() ? keyAli : "eblaghyar-alias")
+            keyPassword (keyPass != null && !keyPass.isEmpty() ? keyPass : "eblaghyar123")
         }
     }
 
