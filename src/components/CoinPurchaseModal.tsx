@@ -145,7 +145,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
                 className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Coins className="w-4 h-4" />
-                <span>{loadingType === "coins_5" ? "در حال پردازش..." : "خرید ۵ سکه (۴۹,۰۰۰ تومان)"}</span>
+                <span>{loadingType === "coins_5" ? "در حال پردازش..." : "خرید ۵ سکه (۷۹,۰۰۰ تومان)"}</span>
               </button>
             </div>
 
@@ -166,7 +166,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
                 className="w-full py-2.5 px-4 bg-amber-700 hover:bg-amber-800 disabled:bg-amber-400 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Coins className="w-4 h-4 text-amber-200" />
-                <span>{loadingType === "coins_15" ? "در حال پردازش..." : "خرید ۱۵ سکه (۱۱۹,۰۰۰ تومان)"}</span>
+                <span>{loadingType === "coins_15" ? "در حال پردازش..." : "خرید ۱۵ سکه (۱۷۹,۰۰۰ تومان)"}</span>
               </button>
             </div>
           </div>
@@ -179,15 +179,15 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h4 className="font-black text-[#4A4844] text-base">نسخه پرمیوم نامحدود</h4>
+                  <h4 className="font-black text-[#4A4844] text-base">نسخه پرمیوم نامحدود (اشتراک ۱ ساله)</h4>
                   {isPremium && (
                     <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                      فعال روی این دستگاه ✓
+                      فعال (معتبر تا یک سال) ✓
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-[#6E5D2A] mt-0.5 leading-relaxed">
-                  تحلیل نامحدود تمامی ابلاغیه‌ها، تنظیم پیش‌نویس لوایح دفاعیه کامل و مشورت بدون محدودیت با دستیار حقوقی.
+                  تحلیل نامحدود تمامی ابلاغیه‌ها، تنظیم پیش‌نویس لوایح دفاعیه کامل و مشورت بدون محدودیت با دستیار حقوقی به مدت ۳۶۵ روز.
                 </p>
               </div>
             </div>
@@ -198,7 +198,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
                 className="w-full sm:w-auto px-5 py-3 rounded-xl bg-[#8F7732] hover:bg-[#776326] disabled:bg-stone-400 text-white font-bold text-xs transition-all shadow-xs cursor-pointer shrink-0 flex items-center justify-center gap-2"
               >
                 <Sparkles className="w-4 h-4 text-[#FFF2B2]" />
-                <span>{loadingType === "premium" ? "در حال فعال‌سازی..." : "ارتقا به پرمیوم (۱۹۹,۰۰۰ ت)"}</span>
+                <span>{loadingType === "premium" ? "در حال فعال‌سازی..." : "ارتقا به پرمیوم یک‌ساله (۲۹۹,۰۰۰ ت)"}</span>
               </button>
             )}
           </div>

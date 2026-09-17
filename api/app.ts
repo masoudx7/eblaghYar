@@ -13,6 +13,7 @@ export interface DeviceRecord {
   device_id: string;
   is_premium: boolean;
   free_tokens: number;
+  premium_expires_at?: string | null;
   created_at?: string;
 }
 
@@ -38,6 +39,7 @@ function getInMemoryDevice(deviceId: string): DeviceRecord {
       device_id: deviceId,
       is_premium: false,
       free_tokens: 2,
+      premium_expires_at: null,
       created_at: new Date().toISOString(),
     };
     inMemoryDevices.set(deviceId, record);
@@ -157,6 +159,21 @@ export const checkDeviceAccess = async (
 
     if (usedFallback || !device) {
       device = getInMemoryDevice(deviceId);
+    }
+
+    // Check if premium has expired (1 year validity)
+    if (device.is_premium && device.premium_expires_at) {
+      if (new Date() > new Date(device.premium_expires_at)) {
+        device.is_premium = false;
+        device.premium_expires_at = null;
+        if (supabase && !usedFallback) {
+          supabase
+            .from("devices")
+            .update({ is_premium: false, premium_expires_at: null })
+            .eq("device_id", deviceId)
+            .catch(() => {});
+        }
+      }
     }
 
     // c. اگر is_premium === false و free_tokens <= 0 بود، درخواست را با وضعیت ۴۰۳ رد کند
@@ -681,10 +698,25 @@ apiRouter.get("/device-status", async (req, res) => {
       device = getInMemoryDevice(deviceId);
     }
 
+    if (device.is_premium && device.premium_expires_at) {
+      if (new Date() > new Date(device.premium_expires_at)) {
+        device.is_premium = false;
+        device.premium_expires_at = null;
+        if (supabase && !usedFallback) {
+          supabase
+            .from("devices")
+            .update({ is_premium: false, premium_expires_at: null })
+            .eq("device_id", deviceId)
+            .catch(() => {});
+        }
+      }
+    }
+
     return res.json({
       success: true,
       free_tokens: device.free_tokens ?? 2,
       is_premium: device.is_premium ?? false,
+      premium_expires_at: device.premium_expires_at || null,
     });
   } catch (err: any) {
     console.error("device-status error:", err);
@@ -708,9 +740,12 @@ apiRouter.post("/activate-premium", async (req, res) => {
       });
     }
 
-    // همیشه در حافظه محلی فعال شود تا کاربر بدون معطلی دسترسی پیدا کند
+    // محاسبه تاریخ انقضا (یک سال از تاریخ خرید)
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+
     const memDevice = getInMemoryDevice(deviceId);
     memDevice.is_premium = true;
+    memDevice.premium_expires_at = expiresAt;
 
     let savedData: any = memDevice;
 
@@ -723,6 +758,7 @@ apiRouter.post("/activate-premium", async (req, res) => {
             {
               device_id: deviceId,
               is_premium: true,
+              premium_expires_at: expiresAt,
             },
             { onConflict: "device_id" }
           )
@@ -739,7 +775,7 @@ apiRouter.post("/activate-premium", async (req, res) => {
 
     return res.json({
       success: true,
-      message: "نسخه پرمیوم با موفقیت برای این دستگاه فعال شد.",
+      message: "نسخه پرمیوم یک‌ساله با موفقیت برای این دستگاه فعال شد.",
       device: savedData,
     });
   } catch (err: any) {
