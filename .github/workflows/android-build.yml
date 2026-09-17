@@ -40,7 +40,9 @@ jobs:
 
       - name: Decode Keystore File
         run: |
-          python3 -c "import base64; open('android/app/eblaghyar-release-key.jks', 'wb').write(base64.b64decode('${{ secrets.KEYSTORE_BASE64 }}'))"
+          python3 -c "import os, base64; open('android/app/eblaghyar-release-key.jks', 'wb').write(base64.b64decode(os.environ['KEYSTORE_BASE64']))"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
 
       - name: Build Web Assets
         run: npm run build
