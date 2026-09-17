@@ -65,6 +65,8 @@ jobs:
                   print('Error processing KEYSTORE_BASE64:', e)
           
           if not valid:
+              if os.path.exists(path):
+                  os.remove(path)
               print('Generating a fresh, valid release keystore automatically on the fly...')
               subprocess.run([
                   'keytool', '-genkey', '-v',
