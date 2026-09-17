@@ -171,7 +171,7 @@ export const checkDeviceAccess = async (
             .from("devices")
             .update({ is_premium: false, premium_expires_at: null })
             .eq("device_id", deviceId)
-            .catch(() => {});
+            .then(null, () => {});
         }
       }
     }
@@ -707,7 +707,7 @@ apiRouter.get("/device-status", async (req, res) => {
             .from("devices")
             .update({ is_premium: false, premium_expires_at: null })
             .eq("device_id", deviceId)
-            .catch(() => {});
+            .then(null, () => {});
         }
       }
     }
