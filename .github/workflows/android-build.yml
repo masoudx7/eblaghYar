@@ -39,7 +39,8 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Decode Keystore File
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/eblaghyar-release-key.jks
+        run: |
+          python3 -c "import base64; open('android/app/eblaghyar-release-key.jks', 'wb').write(base64.b64decode('${{ secrets.KEYSTORE_BASE64 }}'))"
 
       - name: Build Web Assets
         run: npm run build
