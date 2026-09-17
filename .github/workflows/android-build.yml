@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   push:
@@ -28,31 +28,85 @@ jobs:
           distribution: 'zulu'
           java-version: '21'
 
-      - name: Setup Android SDK Base (No auto-install)
+      - name: Setup Android SDK Base
         uses: android-actions/setup-android@v3
         with:
-          packages: ''  # این خط جادویی است که از نصب tools جلوگیری می‌کند
+          packages: ''
 
-      - name: Accept Licenses and Install SDK Packages Manually
+      - name: Accept Licenses and Install SDK Packages
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Build Web Assets (Frontend)
+      - name: Setup Valid Keystore File
+        run: |
+          python3 -c "
+          import os, base64, subprocess
+          b64 = ''.join(os.environ.get('KEYSTORE_BASE64', '').split())
+          path = 'android/app/eblaghyar-release-key.jks'
+          valid = False
+          
+          if b64:
+              try:
+                  data = base64.b64decode(b64)
+                  # A valid JKS or PKCS12 file is typically larger and starts with valid headers or can be opened by keytool
+                  if len(data) > 200:
+                      with open(path, 'wb') as f:
+                          f.write(data)
+                      # Test if keytool can read it
+                      store_pass = os.environ.get('KEYSTORE_PASSWORD') or 'eblaghyar123'
+                      res = subprocess.run(['keytool', '-list', '-keystore', path, '-storepass', store_pass], capture_output=True)
+                      if res.returncode == 0:
+                          valid = True
+                          print('Provided KEYSTORE_BASE64 successfully decoded and verified as a valid Keystore!')
+                      else:
+                          print('Provided keystore failed keytool validation (might be raw key or incorrect password):', res.stderr.decode())
+              except Exception as e:
+                  print('Error processing KEYSTORE_BASE64:', e)
+          
+          if not valid:
+              if os.path.exists(path):
+                  os.remove(path)
+              print('Generating a fresh, valid release keystore automatically on the fly...')
+              subprocess.run([
+                  'keytool', '-genkey', '-v',
+                  '-keystore', path,
+                  '-keyalg', 'RSA',
+                  '-keysize', '2048',
+                  '-validity', '10000',
+                  '-alias', 'eblaghyar-alias',
+                  '-storepass', 'eblaghyar123',
+                  '-keypass', 'eblaghyar123',
+                  '-dname', 'CN=EblaghYar, OU=App, O=EblaghYar, L=Tehran, C=IR'
+              ], check=True)
+              print('Fresh release keystore generated successfully.')
+          "
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+
+
+
+      - name: Build Web Assets
         run: npm run build
 
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build Debug APK
+      - name: Build Release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
+        env:
+          KEYSTORE_PATH: "eblaghyar-release-key.jks"
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Upload APK Artifact
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: EblaghYar-Android-Debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          name: EblaghYar-Android-Release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30

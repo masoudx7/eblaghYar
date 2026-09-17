@@ -1,0 +1,15 @@
+{
+  "name": "ابلاغ‌یار - سامانه هوشمند تحلیل ابلاغیه",
+  "short_name": "ابلاغ‌یار",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF8F5",
+  "theme_color": "#7A8C70",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

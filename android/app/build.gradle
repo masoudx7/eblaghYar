@@ -1,8 +1,9 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "ir.eblaghyar.app"
-    compileSdk = rootProject.ext.compileSdkVersion
+    namespace "ir.eblaghyar.app"
+    compileSdkVersion rootProject.ext.compileSdkVersion
+
     defaultConfig {
         applicationId "ir.eblaghyar.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -11,21 +12,37 @@ android {
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
-             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
-            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
+    // ✅ بخش تنظیمات امضای دیجیتال (Signing Config)
+    signingConfigs {
+        release {
+            def keystorePath = System.getenv("KEYSTORE_PATH") ?: "eblaghyar-release-key.jks"
+            def storePass = System.getenv("KEYSTORE_PASSWORD")
+            def keyAli = System.getenv("KEY_ALIAS")
+            def keyPass = System.getenv("KEY_PASSWORD")
+            
+            storeFile file(keystorePath)
+            storePassword (storePass != null && !storePass.isEmpty() ? storePass : "eblaghyar123")
+            keyAlias (keyAli != null && !keyAli.isEmpty() ? keyAli : "eblaghyar-alias")
+            keyPassword (keyPass != null && !keyPass.isEmpty() ? keyPass : "eblaghyar123")
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // ✅ اتصال تنظیمات امضا به بیلد ریلیس
+            signingConfig signingConfigs.release
         }
     }
 }
 
 repositories {
-    flatDir{
+    flatDir {
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
     }
 }
