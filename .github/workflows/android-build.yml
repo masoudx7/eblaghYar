@@ -53,7 +53,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease
         env:
-          KEYSTORE_PATH: "app/eblaghyar-release-key.jks"
+          KEYSTORE_PATH: "eblaghyar-release-key.jks"
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
