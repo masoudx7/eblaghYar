@@ -40,9 +40,17 @@ jobs:
 
       - name: Decode Keystore File
         run: |
-          python3 -c "import os, base64; open('android/app/eblaghyar-release-key.jks', 'wb').write(base64.b64decode(os.environ['KEYSTORE_BASE64']))"
+          python3 -c "import os, base64; b64_data = ''.join(os.environ['KEYSTORE_BASE64'].split()); open('android/app/eblaghyar-release-key.jks', 'wb').write(base64.b64decode(b64_data))"
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Verify Keystore File
+        run: |
+          echo "Checking keystore file details:"
+          file android/app/eblaghyar-release-key.jks
+          ls -l android/app/eblaghyar-release-key.jks
+          keytool -list -v -keystore android/app/eblaghyar-release-key.jks -storepass "${{ secrets.KEYSTORE_PASSWORD }}" || echo "Keystore verification failed or password mismatch"
+
 
       - name: Build Web Assets
         run: npm run build
