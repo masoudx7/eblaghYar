@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   push:
@@ -28,31 +28,39 @@ jobs:
           distribution: 'zulu'
           java-version: '21'
 
-      - name: Setup Android SDK Base (No auto-install)
+      - name: Setup Android SDK Base
         uses: android-actions/setup-android@v3
         with:
-          packages: ''  # این خط جادویی است که از نصب tools جلوگیری می‌کند
+          packages: ''
 
-      - name: Accept Licenses and Install SDK Packages Manually
+      - name: Accept Licenses and Install SDK Packages
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Build Web Assets (Frontend)
+      - name: Decode Keystore File
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/eblaghyar-release-key.jks
+
+      - name: Build Web Assets
         run: npm run build
 
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Build Debug APK
+      - name: Build Release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
+        env:
+          KEYSTORE_PATH: "app/eblaghyar-release-key.jks"
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Upload APK Artifact
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: EblaghYar-Android-Debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+          name: EblaghYar-Android-Release
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
