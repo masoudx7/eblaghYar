@@ -52,28 +52,3 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_device ON usage_logs(device_id);
 ```
 
 ---
-
-## دستورات اجرایی
-
-```bash
-# نصب وابستگی‌ها
-npm install
-
-# اجرای محیط توسعه (لوکال)
-npm run dev
-
-# ساخت نسخه پروداکشن
-npm run build
-
-# اجرای نسخه پروداکشن
-npm start
-```
-
----
-
-## نحوه دیپلوی در Vercel
-
-1. پروژه را به گیت‌هاب پوش کنید.
-2. در داشبورد [Vercel](https://vercel.com) گزینه **Add New Project** را زده و ریپازیتوری را انتخاب نمایید.
-3. در بخش **Environment Variables** سه متغیر `GEMINI_API_KEY`، `SUPABASE_URL` و `SUPABASE_SERVICE_ROLE_KEY` را تعریف کنید.
-4. دکمه **Deploy** را بزنید؛ تنظیمات لازم در `vercel.json` از پیش انجام شده است.
