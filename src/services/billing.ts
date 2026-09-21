@@ -1,17 +1,17 @@
 // src/services/billing.ts
 
 // اگر کافه بازار هستید:
-import { CafebazaarPoolakey } from '@salarizadi/capacitor-cafebazaar-poolakey';
+// import { CafebazaarPoolakey } from '@salarizadi/capacitor-cafebazaar-poolakey';
 
 // اگر مایکت هستید، خط بالا را پاک کرده و خط زیر را فعال کنید:
-// import { Myket } from '@salarizadi/capacitor-myket';
+import { Myket } from '@salarizadi/capacitor-myket';
 
 // ⬇️ کلید عمومی RSA را از پنل توسعه‌دهنده استور کپی و اینجا جایگزین کنید
-const RSA_PUBLIC_KEY = 'MIHNMA0GCSqGSIb3DQEBAQUAA4G7ADCBtwKBrwC51l6VdldfhH+mDXrMogeYOteb1u64iXvmmEA66skwoVYeaRU2FmNC6gou0ON5laOmoCzBFvHWp+kYQxAJ5AaJX5OSKp+dbTXT4K34fPJJst5tZSX8+aLvyVS5zXQDCCH71ox6tqgLjp3Iie5IaqLkNqQcxWK7ofu6zK6HiF7rHx6+tWdqAnR/mgFazy2JJbb7mTNQPHiml/05VH7RqRBEIJhg+xg/2zi8DIpzuBsCAwEAAQ==';
+const RSA_PUBLIC_KEY = 'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCiOrLsHwp5r6CeIm/ydDXlCsjlSzMGe+u1tAFuw0lstCgyJy6kJX/zl/Po0vJKpmbsQSc+ua3fE8MmrDpPeBTxUNEbjNjdCQWWCc6SZrMHZvPSz82Fxyhyf/A8GkAPtv9CtVsELNLKr1mcOueD3SJtl5S4eYiNvT6NgXjicAfkswIDAQAB';
 
 // انتخاب پلاگین بر اساس استور (برای سادگی کد، فرض را بر بازار می‌گذاریم)
-const BillingPlugin = CafebazaarPoolakey; 
-// اگر مایکت هستید: const BillingPlugin = Myket;
+// const BillingPlugin = CafebazaarPoolakey; 
+const BillingPlugin = Myket;
 
 export const initBilling = async () => {
   try {
