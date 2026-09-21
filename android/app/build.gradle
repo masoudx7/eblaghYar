@@ -11,6 +11,11 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders = [
+            marketApplicationId: "ir.mservices.market",
+            marketBindAddress: "ir.mservices.market",
+            marketPermission: "ir.mservices.market.permission.PAYMENT"
+        ]
         aaptOptions {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
