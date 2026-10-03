@@ -473,18 +473,18 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
               id="start-analysis-btn"
               onClick={handleStartAnalysis}
               disabled={isLoading || (activeTab === "file" && !selectedFileBase64) || (activeTab === "text" && !textInput.trim())}
-              className="w-full py-4 sm:py-5 px-8 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-slate-200 text-white font-black text-base sm:text-lg rounded-2xl shadow-xl shadow-blue-600/30 transition-all disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-3 transform hover:-translate-y-0.5"
+              className="w-full py-4 sm:py-5 px-8 bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 hover:from-slate-800 hover:via-blue-900 hover:to-slate-800 active:bg-slate-950 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black text-lg sm:text-xl rounded-2xl shadow-2xl shadow-slate-900/40 border border-blue-500/30 transition-all disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-3 transform hover:-translate-y-0.5"
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="w-6 h-6 animate-spin text-white" />
+                  <Loader2 className="w-6 h-6 animate-spin text-blue-300" />
                   <span>در حال استخراج متن و تحلیل مواعد قانونی...</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-6 h-6 text-blue-200 animate-pulse" />
+                  <Sparkles className="w-6 h-6 text-blue-400 animate-pulse" />
                   <span>شروع تحلیل هوشمند ابلاغیه</span>
-                  <ArrowLeft className="w-5 h-5 text-blue-200" />
+                  <ArrowLeft className="w-5 h-5 text-blue-300" />
                 </>
               )}
             </button>
