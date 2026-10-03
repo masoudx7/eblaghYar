@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+@theme {
+  --color-primary: #0F172A;
+  --color-secondary: #2563EB;
+  --color-accent: #059669;
+  --color-surface: #FFFFFF;
+  --color-background: #F8FAFC;
+  --color-text-main: #1E293B;
+  --color-text-muted: #64748B;
+  --color-warning: #D97706;
+  --color-error: #DC2626;
+  --font-sans: 'Vazirmatn', sans-serif;
+}
+
 @font-face {
   font-family: 'Vazirmatn';
   src: url('/fonts/Vazirmatn-Regular.woff2') format('woff2');
@@ -34,4 +47,8 @@
 
 body {
   font-family: 'Vazirmatn', sans-serif;
+  background-color: var(--color-background);
+  color: var(--color-text-main);
+  direction: rtl;
 }
+

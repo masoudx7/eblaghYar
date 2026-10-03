@@ -398,8 +398,8 @@ export default function App() {
           </div>
         )}
 
-        {/* هشدار ملایم اتمام رو به پایان توکن‌ها (وقتی زیر ۵ سکه مانده باشد) */}
-        {!isPremium && freeTokens > 0 && freeTokens < 5 && !dismissedLowTokenWarning && !showPremiumPrompt && (
+        {/* هشدار ملایم اتمام رو به پایان توکن‌ها (وقتی کاربر حداقل یک تحلیل انجام داده و ۱ سکه مانده باشد) */}
+        {!isPremium && freeTokens > 0 && freeTokens < 2 && history.length > 0 && !dismissedLowTokenWarning && !showPremiumPrompt && (
           <div
             id="banner-low-tokens"
             className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-gradient-to-r from-amber-50/90 to-yellow-50/90 border border-amber-200 rounded-2xl shadow-xs text-right animate-in fade-in flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"

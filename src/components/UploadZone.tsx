@@ -235,24 +235,20 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
       {/* Introduction Card */}
-      <div className="bg-[#3D4839] text-white rounded-3xl p-6 sm:p-8 shadow-sm border border-[#52604D] relative overflow-hidden">
-        <div className="absolute -left-12 -bottom-12 w-48 h-48 bg-[#7A8C70]/20 rounded-full blur-2xl pointer-events-none"></div>
+      <div className="bg-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-md border border-slate-800 relative overflow-hidden">
+        <div className="absolute -left-12 -bottom-12 w-48 h-48 bg-blue-600/15 rounded-full blur-2xl pointer-events-none"></div>
         <div className="relative z-10">
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#7A8C70]/30 border border-[#96A78D]/40 text-[#E2EBE0] text-xs font-bold">
-              <Sparkles className="w-3.5 h-3.5 text-[#C4D5BD]" />
-              <span>ابلاغ‌یار • دستیار هوشمند حقوقی و ابلاغیه‌های ثنا</span>
-            </div>
-            <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-black/20 text-[#D6D2C9] text-[11px]">
-              <Scale className="w-3 h-3 text-[#A3B899]" />
-              <span>مطابق آیین دادرسی و قوانین جاری ۱۴۰۵</span>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/20 border border-blue-400/30 text-blue-200 text-xs font-bold">
+              <Sparkles className="w-3.5 h-3.5 text-blue-300" />
+              <span>ابلاغ‌یار • دستیار هوشمند ابلاغیه‌های ثنا</span>
             </div>
           </div>
-          <h2 className="text-xl sm:text-2xl font-black mb-2 text-[#FAF8F5]">
-            ابلاغیه دادگاه دریافت کرده‌اید و سردرگم هستید؟
+          <h2 className="text-xl sm:text-2xl font-black mb-2 text-white">
+            ابلاغیه ثنا داری؟ عکس یا فایلش رو بفرست
           </h2>
-          <p className="text-[#D6D2C9] text-sm sm:text-base leading-relaxed max-w-2xl">
-            فایل PDF یا عکس ابلاغیه سامانه ثنا را بارگذاری کنید؛ در کمتر از ۵ ثانیه متوجه شوید شاکی هستید یا متهم، چند روز مهلت دارید، عواقب نرفتن چیست و برای دفاع چه باید بکنید.
+          <p className="text-slate-300 text-sm sm:text-base leading-relaxed max-w-2xl">
+            در کمتر از ۵ ثانیه متوجه شوید شاکی هستید یا متهم، چند روز مهلت دارید و برای دفاع چه باید بکنید. بدون پیچیدگی و سردرگمی.
           </p>
         </div>
       </div>
@@ -345,19 +341,19 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-3 py-2">
-                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#E2EBE0] text-[#7A8C70] flex items-center justify-center transition-transform hover:scale-105 shadow-xs">
+                    <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center transition-transform hover:scale-105 shadow-xs">
                       <UploadCloud className="w-7 h-7 sm:w-8 sm:h-8" />
                     </div>
                     <div>
-                      <p className="font-bold text-[#3D3B38] text-base sm:text-lg">
-                        برای انتخاب فایل یا عکس ابلاغیه لمس کنید
+                      <p className="font-bold text-slate-900 text-base sm:text-lg">
+                        تصویر یا فایل PDF ابلاغیه را اینجا رها کنید
                       </p>
-                      <p className="text-xs sm:text-sm text-[#7A7874] mt-1 leading-relaxed">
-                        پشتیبانی از PDF ثنا، اسکرین‌شات و تصاویر گوشی
+                      <p className="text-xs sm:text-sm text-slate-500 mt-1 leading-relaxed">
+                        پشتیبانی از اسکرین‌شات ثنا و فایل‌های PDF
                       </p>
                     </div>
-                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F0F4EF] border border-[#D5DFD0] rounded-xl text-xs font-bold text-[#5A6D52] mt-1 shadow-2xs">
-                      <FileText className="w-3.5 h-3.5 text-[#7A8C70]" />
+                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-50 border border-blue-200 rounded-xl text-xs font-bold text-blue-700 mt-1 shadow-2xs">
+                      <FileText className="w-3.5 h-3.5 text-blue-600" />
                       <span>انتخاب از حافظه گوشی یا رایانه</span>
                     </div>
                   </div>
@@ -474,17 +470,17 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
                     رمزنگاری‌شده
                   </span>
                 </div>
-                <p className="text-[11px] leading-relaxed text-[#7A7874] mt-0.5">
-                  اسناد و تصاویر در حافظه موقت پردازش شده و در دیتابیس عمومی ذخیره نمی‌شوند. اطلاعات هویتی محرمانه باقی می‌مانند.
+                <p className="text-[11px] leading-relaxed text-slate-600 mt-0.5">
+                  🔒 محرمانه و رمزنگاری‌شده — روی سرور ذخیره نمی‌شود.
                 </p>
               </div>
             </div>
 
             {/* Article 55 Regulatory compliance note */}
-            <div className="pt-2 border-t border-[#F0EEE9] flex items-center gap-2 text-[11px] text-[#8C8982]">
-              <Scale className="w-3.5 h-3.5 text-[#7A8C70] shrink-0" />
+            <div className="pt-2 border-t border-slate-100 flex items-center gap-2 text-[11px] text-slate-500">
+              <Scale className="w-3.5 h-3.5 text-blue-600 shrink-0" />
               <span>
-                <strong>مطابق ماده ۵۵ قانون وکالت:</strong> این سامانه ابزار پردازش متن و محاسبه مواعد است؛ بررسی تخصصی پرونده و دادخواست‌ها توسط وکلای پایه یک دادگستری انجام می‌شود.
+                <strong>ماده ۵۵ قانون وکالت:</strong> این سامانه ابزار کمکی است و جایگزین وکیل دادگستری نمی‌شود.
               </span>
             </div>
           </div>
@@ -495,7 +491,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
               id="start-analysis-btn"
               onClick={handleStartAnalysis}
               disabled={isLoading || (activeTab === "file" && !selectedFileBase64) || (activeTab === "text" && !textInput.trim())}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-3.5 bg-[#7A8C70] hover:bg-[#68795F] disabled:bg-[#D1CEC4] text-white font-bold text-sm rounded-2xl shadow-lg shadow-[#7A8C70]/20 transition-all disabled:cursor-not-allowed cursor-pointer"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 text-white font-extrabold text-sm sm:text-base rounded-2xl shadow-md transition-all disabled:cursor-not-allowed cursor-pointer"
             >
               {isLoading ? (
                 <>
@@ -504,8 +500,8 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-5 h-5" />
-                  <span>تحلیل هوشمند ابلاغیه با ابلاغ‌یار</span>
+                  <Sparkles className="w-5 h-5 text-blue-400" />
+                  <span>شروع تحلیل هوشمند ابلاغیه</span>
                   <ArrowLeft className="w-4 h-4" />
                 </>
               )}
