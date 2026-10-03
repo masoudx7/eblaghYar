@@ -455,54 +455,36 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             </div>
           )}
 
-          {/* Privacy & Legal Shield Info Banner */}
-          <div className="mt-6 bg-[#FDFCFB] border border-[#F0EEE9] p-4 rounded-2xl space-y-2.5">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-[#F0F4EF] text-[#5A6D52] rounded-xl flex items-center justify-center shrink-0">
-                <ShieldCheck className="w-4.5 h-4.5 text-[#7A8C70]" />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-xs font-bold text-[#3D3B38]">
-                    پروتکل امنیت داده و محرمانگی (Ephemeral Processing)
-                  </p>
-                  <span className="text-[10px] bg-[#E2EBE0] text-[#5A6D52] px-2 py-0.2 rounded-full font-bold">
-                    رمزنگاری‌شده
-                  </span>
-                </div>
-                <p className="text-[11px] leading-relaxed text-slate-600 mt-0.5">
-                  🔒 محرمانه و رمزنگاری‌شده — روی سرور ذخیره نمی‌شود.
-                </p>
-              </div>
+          {/* Streamlined Privacy & Security reassurance (One clean line) */}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 px-1 text-xs text-slate-500">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>🔒 محرمانه و رمزنگاری‌شده — روی سرور ذخیره نمی‌شود</span>
             </div>
-
-            {/* Article 55 Regulatory compliance note */}
-            <div className="pt-2 border-t border-slate-100 flex items-center gap-2 text-[11px] text-slate-500">
-              <Scale className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span>
-                <strong>ماده ۵۵ قانون وکالت:</strong> این سامانه ابزار کمکی است و جایگزین وکیل دادگستری نمی‌شود.
-              </span>
+            <div className="flex items-center gap-1 text-[11px] text-slate-400">
+              <Scale className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+              <span>ماده ۵۵: ابزار کمکی تحلیل</span>
             </div>
           </div>
 
-          {/* Submit Button */}
-          <div className="mt-6 flex justify-end">
+          {/* Dominant Primary Submit Button */}
+          <div className="mt-4">
             <button
               id="start-analysis-btn"
               onClick={handleStartAnalysis}
               disabled={isLoading || (activeTab === "file" && !selectedFileBase64) || (activeTab === "text" && !textInput.trim())}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 text-white font-extrabold text-sm sm:text-base rounded-2xl shadow-md transition-all disabled:cursor-not-allowed cursor-pointer"
+              className="w-full py-4 sm:py-5 px-8 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-slate-200 text-white font-black text-base sm:text-lg rounded-2xl shadow-xl shadow-blue-600/30 transition-all disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-3 transform hover:-translate-y-0.5"
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <Loader2 className="w-6 h-6 animate-spin text-white" />
                   <span>در حال استخراج متن و تحلیل مواعد قانونی...</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-5 h-5 text-blue-400" />
+                  <Sparkles className="w-6 h-6 text-blue-200 animate-pulse" />
                   <span>شروع تحلیل هوشمند ابلاغیه</span>
-                  <ArrowLeft className="w-4 h-4" />
+                  <ArrowLeft className="w-5 h-5 text-blue-200" />
                 </>
               )}
             </button>
