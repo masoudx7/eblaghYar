@@ -13,21 +13,11 @@ import {
   Copy,
   Check,
   Printer,
-  MessageSquare,
   Lightbulb,
   Info,
   ShieldAlert,
-  HelpCircle,
-  FileSearch,
-  CheckSquare,
-  Square,
-  ArrowRight,
-  ShieldCheck,
   Sparkles,
-  Calendar,
-  CalendarPlus,
-  Download,
-  ExternalLink,
+  ShieldCheck,
   Bell,
 } from "lucide-react";
 import { JudicialNoticeAnalysis, LegalActionItem, AuthUser } from "../types";
@@ -36,18 +26,12 @@ import { AttendanceReminderCard } from "./AttendanceReminderCard";
 
 interface AnalysisResultProps {
   analysis: JudicialNoticeAnalysis;
-  onOpenChat: () => void;
-  onAskSectionQuestion?: (question: string, sectionContext: { sectionTitle: string; sectionSnippet: string }) => void;
-  onOpenClauseModal?: (initialClause?: string, initialQuestion?: string, sectionTitle?: string) => void;
   onOpenDefenseDraft?: () => void;
   currentUser?: AuthUser | null;
 }
 
 export const AnalysisResult: React.FC<AnalysisResultProps> = ({
   analysis,
-  onOpenChat,
-  onAskSectionQuestion,
-  onOpenClauseModal,
   onOpenDefenseDraft,
   currentUser,
 }) => {
@@ -80,17 +64,6 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
 
   const handlePrint = () => {
     window.print();
-  };
-
-  const triggerSectionAsk = (question: string, sectionTitle: string, snippet: string) => {
-    if (onAskSectionQuestion) {
-      onAskSectionQuestion(question, {
-        sectionTitle,
-        sectionSnippet: snippet,
-      });
-    } else {
-      onOpenChat();
-    }
   };
 
   // Determine urgency styling with Natural Tones palette
@@ -140,24 +113,14 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
 
         {/* Action Buttons Grid */}
         <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
-          {/* Primary Action 1: Legal AI Consultation */}
-          <button
-            id="btn-goto-chat"
-            onClick={onOpenChat}
-            className="col-span-2 sm:col-auto flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-[#7A8C70] hover:bg-[#68795F] rounded-xl transition-all shadow-xs cursor-pointer"
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>مشاور حقوقی هوشمند (پرسش درباره این ابلاغیه)</span>
-          </button>
-
-          {/* Generate Defense Draft Button */}
+          {/* Primary Action: Generate Defense Draft Button */}
           {onOpenDefenseDraft && (
             <button
               id="btn-open-defense-draft-top"
               onClick={onOpenDefenseDraft}
-              className="col-span-2 sm:col-auto flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-[#5A6D52] hover:text-[#3D4839] bg-[#F0F4EF] hover:bg-[#E2EBE0] border border-[#D5DFD0] rounded-xl transition-colors cursor-pointer"
+              className="col-span-2 sm:col-auto flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-[#7A8C70] hover:bg-[#68795F] rounded-xl transition-all shadow-xs cursor-pointer"
             >
-              <FileText className="w-3.5 h-3.5 text-[#7A8C70]" />
+              <FileText className="w-3.5 h-3.5" />
               <span>تنظیم پیش‌نویس لایحه دفاعیه</span>
             </button>
           )}
@@ -175,17 +138,6 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
             <Bell className="w-3.5 h-3.5 text-[#8F7732]" />
             <span className="truncate">یادآور ۲ روز قبل</span>
           </button>
-
-          {onOpenClauseModal && (
-            <button
-              id="btn-clause-inquiry-top"
-              onClick={() => onOpenClauseModal("", "", "بند خاص از ابلاغیه")}
-              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-[#5A6D52] hover:text-[#3D4839] bg-[#F0F4EF] hover:bg-[#E2EBE0] border border-[#D5DFD0] rounded-xl transition-colors cursor-pointer"
-            >
-              <FileSearch className="w-3.5 h-3.5 text-[#7A8C70]" />
-              <span className="truncate">موشکافی بند خاص</span>
-            </button>
-          )}
 
           <button
             id="btn-copy-summary"
@@ -234,25 +186,9 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
 
         {/* In Simple Words Box with border-r-4 accent */}
         <div className="bg-white rounded-2xl p-5 sm:p-6 border border-[#E5E2D9] border-r-4 border-r-[#7A8C70] shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-[#4A4844] font-bold text-sm">
-              <Lightbulb className="w-4 h-4 text-[#8F7732]" />
-              <span>موضوع این ابلاغیه به زبان ساده و خودمانی:</span>
-            </div>
-
-            <button
-              onClick={() =>
-                triggerSectionAsk(
-                  "توضیحات بیشتر و جزئیات حقوقی درباره موضوع این ابلاغیه را بیان کنید.",
-                  "خلاصه و تحلیل موضوع ابلاغیه",
-                  analysis.summaryInSimpleWords
-                )
-              }
-              className="text-xs font-bold text-[#5A6D52] hover:text-[#3D4839] flex items-center gap-1 hover:underline cursor-pointer print:hidden"
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span>پرسش درباره این موضوع</span>
-            </button>
+          <div className="flex items-center gap-2 text-[#4A4844] font-bold text-sm">
+            <Lightbulb className="w-4 h-4 text-[#8F7732]" />
+            <span>موضوع این ابلاغیه به زبان ساده و خودمانی:</span>
           </div>
 
           <p className="text-[#5C5A55] text-sm sm:text-base leading-relaxed font-normal">
@@ -270,26 +206,10 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
 
       {/* Case Identity Grid */}
       <div className="bg-white rounded-3xl border border-[#E5E2D9] p-6 sm:p-7 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-bold text-[#4A4844] flex items-center gap-2">
-            <FileCheck className="w-5 h-5 text-[#7A8C70]" />
-            <span>شناسنامه و مشخصات پرونده قضایی</span>
-          </h3>
-
-          <button
-            onClick={() =>
-              triggerSectionAsk(
-                `نقش من در این پرونده (${analysis.caseDetails.userRole}) است. چه اختیارات، تکالیف و حقوقی در دادگاه یا دادسرا دارم؟`,
-                "سمت و نقش شما در پرونده",
-                `سمت: ${analysis.caseDetails.userRole} | مرجع: ${analysis.caseDetails.issuingAuthority}`
-              )
-            }
-            className="text-xs font-bold text-[#5A6D52] hover:text-[#3D4839] flex items-center gap-1 hover:underline cursor-pointer print:hidden"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>پرسش درباره حقوق و تکالیف نقش من</span>
-          </button>
-        </div>
+        <h3 className="text-base font-bold text-[#4A4844] flex items-center gap-2">
+          <FileCheck className="w-5 h-5 text-[#7A8C70]" />
+          <span>شناسنامه و مشخصات پرونده قضایی</span>
+        </h3>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 rounded-2xl bg-[#FBFAF7] border border-[#F0EEE9]">
@@ -345,26 +265,10 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
 
       {/* Deadlines & Legal Rules (مواعد قانونی) */}
       <div className="bg-white rounded-3xl border border-[#E5E2D9] p-6 sm:p-7 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-bold text-[#4A4844] flex items-center gap-2">
-            <Clock className="w-5 h-5 text-[#8F7732]" />
-            <span>مهلت‌های قانونی و نحوه محاسبه روزها</span>
-          </h3>
-
-          <button
-            onClick={() =>
-              triggerSectionAsk(
-                `نحوه دقیق محاسبه مهلت قانونی (${analysis.deadlines.deadlineDescription}) بر اساس ${analysis.deadlines.legalBasis} چیست و اگر نرسم چه کنم؟`,
-                "مهلت‌ها و مواعد قانونی",
-                `${analysis.deadlines.deadlineDescription} - ${analysis.deadlines.legalBasis}`
-              )
-            }
-            className="text-xs font-bold text-[#8F7732] hover:text-[#6E5D2A] flex items-center gap-1 hover:underline cursor-pointer print:hidden"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>پرسش درباره تمدید مهلت و عذر موجه</span>
-          </button>
-        </div>
+        <h3 className="text-base font-bold text-[#4A4844] flex items-center gap-2">
+          <Clock className="w-5 h-5 text-[#8F7732]" />
+          <span>مهلت‌های قانونی و نحوه محاسبه روزها</span>
+        </h3>
 
         <div className="bg-[#FAF6EC] border border-[#EBE4CF] rounded-2xl p-5 space-y-3">
           <div className="flex items-start gap-3.5">
@@ -484,21 +388,6 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
                           </span>
                         )}
                       </div>
-
-                      {/* Question button for this specific step */}
-                      <button
-                        onClick={() =>
-                          triggerSectionAsk(
-                            `درباره گام «${action.title}»: چطور این اقدام را انجام دهم و چه نکاتی را در محاکم رعایت کنم؟`,
-                            `گام ${action.step || idx + 1}: ${action.title}`,
-                            action.description
-                          )
-                        }
-                        className="text-[11px] sm:text-xs font-bold text-[#5A6D52] hover:text-[#3D4839] flex items-center gap-1 bg-white hover:bg-[#F0F4EF] border border-[#D5DFD0] px-2.5 py-1 rounded-xl transition-colors cursor-pointer print:hidden shadow-2xs self-start sm:self-auto"
-                      >
-                        <HelpCircle className="w-3.5 h-3.5" />
-                        <span>راهنمایی این گام</span>
-                      </button>
                     </div>
 
                     {/* Step Description */}
@@ -564,26 +453,10 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
 
       {/* Consequences of Inaction (عواقب عدم اقدام) */}
       <div className="bg-white rounded-2xl sm:rounded-3xl border border-[#E5E2D9] p-4 sm:p-7 shadow-sm space-y-3 sm:space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <h3 className="text-sm sm:text-base font-bold text-[#8B4513] flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5 text-[#8B4513]" />
-            <span>عواقب و خطرات پیگیری نکردن در مهلت مقرر</span>
-          </h3>
-
-          <button
-            onClick={() =>
-              triggerSectionAsk(
-                "برای جلوگیری از این عواقب قانونی و توقیف حساب یا صدور حکم غیابی، چه راهکار فوری دارم؟",
-                "عواقب عدم اقدام قانونی",
-                analysis.consequencesOfInaction.join(" - ")
-              )
-            }
-            className="text-[11px] sm:text-xs font-bold text-[#8B4513] hover:text-[#6E350E] flex items-center gap-1 hover:underline cursor-pointer print:hidden self-start sm:self-auto"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>راهکار جلوگیری از این عواقب</span>
-          </button>
-        </div>
+        <h3 className="text-sm sm:text-base font-bold text-[#8B4513] flex items-center gap-2">
+          <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5 text-[#8B4513]" />
+          <span>عواقب و خطرات پیگیری نکردن در مهلت مقرر</span>
+        </h3>
 
         <p className="text-xs text-[#7A7874] leading-relaxed">
           در صورت عدم حضور یا عدم ارائه لایحه در موعد قانونی، طبق قوانین ایران موارد زیر رخ خواهد داد:
@@ -605,13 +478,10 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
       {/* Plain Language Glossary (واژه‌نامه اصطلاحات ابلاغیه) */}
       {analysis.glossary && analysis.glossary.length > 0 && (
         <div className="bg-white rounded-2xl sm:rounded-3xl border border-[#E5E2D9] p-4 sm:p-7 shadow-sm space-y-3 sm:space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-            <h3 className="text-sm sm:text-base font-bold text-[#4A4844] flex items-center gap-2">
-              <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 text-[#7A8C70]" />
-              <span>معنی اصطلاحات حقوقی این ابلاغیه (واژه‌نامه ساده)</span>
-            </h3>
-            <span className="text-[11px] sm:text-xs text-[#7A7874]">برای هر اصطلاح می‌توانید سوال بپرسید</span>
-          </div>
+          <h3 className="text-sm sm:text-base font-bold text-[#4A4844] flex items-center gap-2">
+            <BookOpen className="w-4 h-4 sm:w-5 sm:h-5 text-[#7A8C70]" />
+            <span>معنی اصطلاحات حقوقی این ابلاغیه (واژه‌نامه ساده)</span>
+          </h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3.5">
             {analysis.glossary.map((item, idx) => (
@@ -624,19 +494,6 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
                     <span className="font-bold text-[#4A4844] text-xs sm:text-sm">
                       «{item.term}»
                     </span>
-                    <button
-                      onClick={() =>
-                        triggerSectionAsk(
-                          `اصطلاح «${item.term}» در پرونده قضایی من دقیقاً چه تاثیری دارد و چه معنایی می‌دهد؟`,
-                          `اصطلاح: ${item.term}`,
-                          item.plainMeaning
-                        )
-                      }
-                      className="text-[11px] text-[#5A6D52] hover:text-[#3D4839] font-semibold flex items-center gap-0.5 hover:underline cursor-pointer print:hidden"
-                    >
-                      <HelpCircle className="w-3 h-3" />
-                      <span>پرسش</span>
-                    </button>
                   </div>
                   <p className="text-xs text-[#5C5A55] leading-relaxed">
                     {item.plainMeaning}

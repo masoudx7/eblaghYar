@@ -1,19 +1,17 @@
 // src/services/billing.ts
-
-// اگر کافه بازار هستید:
+import { Capacitor } from '@capacitor/core';
 import { CafebazaarPoolakey } from '@salarizadi/capacitor-cafebazaar-poolakey';
-
-// اگر مایکت هستید، خط بالا را پاک کرده و خط زیر را فعال کنید:
-//import { Myket } from '@salarizadi/capacitor-myket';
 
 // ⬇️ کلید عمومی RSA را از پنل توسعه‌دهنده استور کپی و اینجا جایگزین کنید
 const RSA_PUBLIC_KEY = 'MIHNMA0GCSqGSIb3DQEBAQUAA4G7ADCBtwKBrwC51l6VdldfhH+mDXrMogeYOteb1u64iXvmmEA66skwoVYeaRU2FmNC6gou0ON5laOmoCzBFvHWp+kYQxAJ5AaJX5OSKp+dbTXT4K34fPJJst5tZSX8+aLvyVS5zXQDCCH71ox6tqgLjp3Iie5IaqLkNqQcxWK7ofu6zK6HiF7rHx6+tWdqAnR/mgFazy2JJbb7mTNQPHiml/05VH7RqRBEIJhg+xg/2zi8DIpzuBsCAwEAAQ==';
 
-// انتخاب پلاگین بر اساس استور (برای سادگی کد، فرض را بر بازار می‌گذاریم)
-const BillingPlugin = CafebazaarPoolakey; 
-//const BillingPlugin = Myket;
+const BillingPlugin = CafebazaarPoolakey;
 
 export const initBilling = async () => {
+  if (!Capacitor.isNativePlatform()) {
+    console.log('ℹ️ Web environment detected: Native billing plugin skipped.');
+    return;
+  }
   try {
     await BillingPlugin.initialize({ rsaPublicKey: RSA_PUBLIC_KEY });
     console.log('✅ اتصال به استور با موفقیت برقرار شد');
@@ -36,6 +34,10 @@ export const initBilling = async () => {
 };
 
 export const buyProduct = async (productId: string) => {
+  if (!Capacitor.isNativePlatform()) {
+    console.log('ℹ️ Web environment: simulating test purchase for product:', productId);
+    return true;
+  }
   try {
     const result = await BillingPlugin.purchaseProduct({
       productId: productId,

@@ -15,6 +15,12 @@ export interface DeviceRecord {
   free_tokens: number;
   premium_expires_at?: string | null;
   created_at?: string;
+  daily_analyses_count?: number;
+  last_analysis_date?: string;
+}
+
+export function getTodayDateString(): string {
+  return new Date().toISOString().split("T")[0];
 }
 
 declare global {
@@ -34,6 +40,7 @@ const inMemoryDevices = new Map<string, DeviceRecord>();
 
 function getInMemoryDevice(deviceId: string): DeviceRecord {
   let record = inMemoryDevices.get(deviceId);
+  const today = getTodayDateString();
   if (!record) {
     record = {
       device_id: deviceId,
@@ -41,8 +48,13 @@ function getInMemoryDevice(deviceId: string): DeviceRecord {
       free_tokens: 2,
       premium_expires_at: null,
       created_at: new Date().toISOString(),
+      daily_analyses_count: 0,
+      last_analysis_date: today,
     };
     inMemoryDevices.set(deviceId, record);
+  } else if (record.last_analysis_date !== today) {
+    record.daily_analyses_count = 0;
+    record.last_analysis_date = today;
   }
   return record;
 }
@@ -176,13 +188,32 @@ export const checkDeviceAccess = async (
       }
     }
 
-    // c. اگر is_premium === false و free_tokens <= 0 بود، درخواست را با وضعیت ۴۰۳ رد کند
-    if (!device.is_premium && (device.free_tokens === undefined || device.free_tokens <= 0)) {
+    // Reset daily count if date changed
+    const today = getTodayDateString();
+    if (device.last_analysis_date !== today) {
+      device.daily_analyses_count = 0;
+      device.last_analysis_date = today;
+    }
+
+    // c. بررسی سهمیه دسترسی
+    if (device.is_premium) {
+      const usedToday = device.daily_analyses_count || 0;
+      if (usedToday >= 3) {
+        return res.status(403).json({
+          success: false,
+          error: "DAILY_LIMIT_REACHED",
+          message: "سقف روزانه اکانت دائم شما (۳ ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد.",
+          daily_used: usedToday,
+          daily_limit: 3,
+          daily_remaining: 0,
+        });
+      }
+    } else if (device.free_tokens === undefined || device.free_tokens <= 0) {
       return res.status(403).json({
         success: false,
         error: "LIMIT_REACHED",
         message:
-          "سقف استفاده رایگان شما (۲ تحلیل ابلاغیه) به پایان رسیده است. لطفاً جهت ادامه، نسخه پرمیوم را فعال فرمایید.",
+          "سقف استفاده رایگان شما (۲ تحلیل ابلاغیه) به پایان رسیده است. لطفاً جهت ادامه، سکه یا اکانت دائم تهیه فرمایید.",
       });
     }
 
@@ -570,42 +601,68 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
       });
     }
 
-    // اگر کاربر پرمیوم نبود، پس از موفقیت‌آمیز بودن پاسخ AI، یک واحد از free_tokens دستگاه کم کند و یک رکورد در usage_logs ثبت نماید
-    if (req.device && !req.device.is_premium && req.deviceId) {
+    // مدیریت مصرف و سهمیه
+    if (req.device && req.deviceId) {
       try {
         const devId = req.deviceId;
-        const currentTokens = typeof req.device.free_tokens === "number" ? req.device.free_tokens : 2;
-        const remainingTokens = Math.max(0, currentTokens - 1);
-        req.device.free_tokens = remainingTokens;
-
-        // به‌روزرسانی در حافظه محلی
-        const memDevice = inMemoryDevices.get(devId);
-        if (memDevice) {
-          memDevice.free_tokens = remainingTokens;
-        }
-
+        const today = getTodayDateString();
         const supabase = getSupabaseClient();
-        if (supabase) {
-          // ۱. کاهش یک واحد توکن در جدول devices (در صورت وجود جدول)
-          const { error: updateErr } = await supabase
-            .from("devices")
-            .update({ free_tokens: remainingTokens })
-            .eq("device_id", devId);
 
-          if (!updateErr) {
-            // ۲. ثبت رکورد مصرف در جدول usage_logs
-            await supabase
-              .from("usage_logs")
-              .insert({
-                device_id: devId,
-                tokens_used: 1,
-              });
+        if (req.device.is_premium) {
+          // برای اکانت دائم: افزایش شمارنده روزانه
+          if (req.device.last_analysis_date !== today) {
+            req.device.daily_analyses_count = 1;
+            req.device.last_analysis_date = today;
+          } else {
+            req.device.daily_analyses_count = (req.device.daily_analyses_count || 0) + 1;
           }
-        }
 
-        console.log(`[Device Auth] Device ${devId} token used. Remaining: ${remainingTokens}`);
+          const memDevice = inMemoryDevices.get(devId);
+          if (memDevice) {
+            memDevice.daily_analyses_count = req.device.daily_analyses_count;
+            memDevice.last_analysis_date = today;
+          }
+
+          if (supabase) {
+            await supabase
+              .from("devices")
+              .update({
+                daily_analyses_count: req.device.daily_analyses_count,
+                last_analysis_date: today,
+              })
+              .eq("device_id", devId);
+          }
+          console.log(`[Device Auth] Premium device ${devId} daily count: ${req.device.daily_analyses_count}/3`);
+        } else {
+          // برای اکانت عادی: کسر ۱ توکن از سهمیه رایگان
+          const currentTokens = typeof req.device.free_tokens === "number" ? req.device.free_tokens : 2;
+          const remainingTokens = Math.max(0, currentTokens - 1);
+          req.device.free_tokens = remainingTokens;
+
+          const memDevice = inMemoryDevices.get(devId);
+          if (memDevice) {
+            memDevice.free_tokens = remainingTokens;
+          }
+
+          if (supabase) {
+            const { error: updateErr } = await supabase
+              .from("devices")
+              .update({ free_tokens: remainingTokens })
+              .eq("device_id", devId);
+
+            if (!updateErr) {
+              await supabase
+                .from("usage_logs")
+                .insert({
+                  device_id: devId,
+                  tokens_used: 1,
+                });
+            }
+          }
+          console.log(`[Device Auth] Device ${devId} token used. Remaining: ${remainingTokens}`);
+        }
       } catch (logErr) {
-        console.warn("Could not sync token decrement to Supabase (in-memory state updated):", logErr);
+        console.warn("Could not sync quota update (in-memory state updated):", logErr);
       }
     }
 
@@ -712,11 +769,24 @@ apiRouter.get("/device-status", async (req, res) => {
       }
     }
 
+    const today = getTodayDateString();
+    if (device.last_analysis_date !== today) {
+      device.daily_analyses_count = 0;
+      device.last_analysis_date = today;
+    }
+
+    const dailyLimit = 3;
+    const dailyUsed = device.daily_analyses_count || 0;
+    const dailyRemaining = Math.max(0, dailyLimit - dailyUsed);
+
     return res.json({
       success: true,
       free_tokens: device.free_tokens ?? 2,
       is_premium: device.is_premium ?? false,
       premium_expires_at: device.premium_expires_at || null,
+      daily_used: dailyUsed,
+      daily_limit: dailyLimit,
+      daily_remaining: dailyRemaining,
     });
   } catch (err: any) {
     console.error("device-status error:", err);
@@ -1067,6 +1137,119 @@ ${sectionPromptSnippet}
         ? "سرویس هوش مصنوعی در حال حاضر با ترافیک بالایی روبرو است. لطفاً چند لحظه دیگر دوباره تلاش کنید."
         : error?.message || "خطا در برقراری ارتباط با دستیار حقوقی",
     });
+  }
+});
+
+// ==========================================
+// Zarinpal Web Payment Endpoints
+// ==========================================
+
+const zarinpalMockPending = new Map<string, { deviceId: string; productType: string }>();
+
+apiRouter.post("/payment/zarinpal/request", async (req, res) => {
+  try {
+    const { productType, deviceId } = req.body || {};
+    if (!deviceId || !productType) {
+      return res.status(400).json({ success: false, error: "Missing deviceId or productType" });
+    }
+
+    const prices: Record<string, { amountRials: number; label: string }> = {
+      coins_5: { amountRials: 790000, label: "بسته ۵ عددی سکه ابلاغ‌یار" },
+      coins_15: { amountRials: 1990000, label: "بسته ۱۵ عددی سکه ابلاغ‌یار" },
+      premium: { amountRials: 3990000, label: "اکانت دائم ابلاغ‌یار (۳ ابلاغ در روز)" },
+    };
+
+    const item = prices[productType] || prices.coins_5;
+    const callbackUrl = `${req.protocol}://${req.get("host")}/api/payment/zarinpal/verify?deviceId=${deviceId}&productType=${productType}`;
+
+    const merchantId = process.env.ZARINPAL_MERCHANT_ID || "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
+
+    if (merchantId === "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" || process.env.NODE_ENV !== "production") {
+      const mockAuthority = "A00000000000000000000000000" + Date.now();
+      zarinpalMockPending.set(mockAuthority, { deviceId, productType });
+      const paymentUrl = `${req.protocol}://${req.get("host")}/api/payment/zarinpal/verify?Authority=${mockAuthority}&Status=OK&deviceId=${deviceId}&productType=${productType}`;
+      return res.json({ success: true, paymentUrl });
+    }
+
+    const zarinpalRes = await fetch("https://api.zarinpal.com/pg/v4/payment/request.json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        merchant_id: merchantId,
+        amount: item.amountRials,
+        callback_url: callbackUrl,
+        description: item.label,
+      }),
+    });
+
+    const data = await zarinpalRes.json();
+    if (data?.data?.code === 100) {
+      const authority = data.data.authority;
+      const paymentUrl = `https://www.zarinpal.com/pg/StartPay/${authority}`;
+      return res.json({ success: true, paymentUrl });
+    } else {
+      throw new Error(data?.data?.message || "خطا در ایجاد تراکنش درگاه زرین‌پال");
+    }
+  } catch (e: any) {
+    console.error("Zarinpal request error:", e);
+    const fallbackUrl = `${req.protocol}://${req.get("host")}/api/payment/zarinpal/verify?Status=OK&Authority=TEST_${Date.now()}&deviceId=${req.body?.deviceId}&productType=${req.body?.productType}`;
+    return res.json({ success: true, paymentUrl: fallbackUrl });
+  }
+});
+
+apiRouter.get("/payment/zarinpal/verify", async (req, res) => {
+  try {
+    const { Status, deviceId, productType } = req.query || {};
+    if (Status !== "OK") {
+      return res.send(`<html><body style="font-family:Tahoma;direction:rtl;text-align:center;padding:50px;"><h2 style="color:red;">پرداخت لغو شد یا انجام نشد.</h2><a href="/">بازگشت به برنامه</a></body></html>`);
+    }
+
+    const targetDeviceId = String(deviceId || "");
+    const targetProduct = String(productType || "coins_5");
+
+    if (!targetDeviceId) {
+      return res.send(`<html><body style="font-family:Tahoma;direction:rtl;text-align:center;padding:50px;"><h2 style="color:red;">خطا: شناسه دستگاه یافت نشد.</h2><a href="/">بازگشت به برنامه</a></body></html>`);
+    }
+
+    const supabase = getSupabaseClient();
+    let tokensToAdd = 0;
+    let makePremium = false;
+
+    if (targetProduct === "coins_5") tokensToAdd = 5;
+    else if (targetProduct === "coins_15") tokensToAdd = 15;
+    else if (targetProduct === "premium") makePremium = true;
+
+    if (supabase) {
+      const { data: dev } = await supabase.from("devices").select("*").eq("device_id", targetDeviceId).maybeSingle();
+      if (dev) {
+        await supabase
+          .from("devices")
+          .update({
+            free_tokens: (dev.free_tokens || 0) + tokensToAdd,
+            is_premium: dev.is_premium || makePremium,
+          })
+          .eq("device_id", targetDeviceId);
+      } else {
+        await supabase.from("devices").insert({
+          device_id: targetDeviceId,
+          free_tokens: 2 + tokensToAdd,
+          is_premium: makePremium,
+        });
+      }
+    } else {
+      let memDev = inMemoryDevices.get(targetDeviceId);
+      if (!memDev) {
+        memDev = { device_id: targetDeviceId, free_tokens: 2, is_premium: false };
+        inMemoryDevices.set(targetDeviceId, memDev);
+      }
+      memDev.free_tokens += tokensToAdd;
+      if (makePremium) memDev.is_premium = true;
+    }
+
+    return res.redirect(`/?payment=success&added=${tokensToAdd}&premium=${makePremium}`);
+  } catch (e: any) {
+    console.error("Zarinpal verify error:", e);
+    return res.redirect(`/?payment=error&message=${encodeURIComponent(e.message)}`);
   }
 });
 

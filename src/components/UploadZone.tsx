@@ -14,6 +14,7 @@ import {
   Sliders,
   Scale,
   SunMedium,
+  Camera,
 } from "lucide-react";
 import type { SampleNotice } from "../sampleData";
 
@@ -39,6 +40,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   const [isPrivacyShieldActive, setIsPrivacyShieldActive] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to mask sensitive information (National ID, Phone numbers, case party names)
   const maskSensitiveText = (text: string): string => {
@@ -318,6 +320,14 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
                   className="hidden"
                   onChange={handleFileChange}
                 />
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
 
                 {selectedFileName ? (
                   <div className="flex flex-col items-center gap-2.5">
@@ -349,12 +359,29 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
                         تصویر یا فایل PDF ابلاغیه را اینجا رها کنید
                       </p>
                       <p className="text-xs sm:text-sm text-slate-500 mt-1 leading-relaxed">
-                        پشتیبانی از اسکرین‌شات ثنا و فایل‌های PDF
+                        پشتیبانی از اسکرین‌شات ثنا، فایل‌های PDF و عکاسی مستقیم
                       </p>
                     </div>
-                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-50 border border-blue-200 rounded-xl text-xs font-bold text-blue-700 mt-1 shadow-2xs">
-                      <FileText className="w-3.5 h-3.5 text-blue-600" />
-                      <span>انتخاب از حافظه گوشی یا رایانه</span>
+                    
+                    {/* Dual Action Buttons: File Picker & Direct Camera Capture */}
+                    <div className="flex flex-wrap items-center justify-center gap-2.5 mt-2" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-xs sm:text-sm font-bold text-blue-700 transition-all cursor-pointer shadow-2xs"
+                      >
+                        <FileText className="w-4 h-4 text-blue-600" />
+                        <span>انتخاب فایل یا گالری</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => cameraInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer shadow-xs"
+                      >
+                        <Camera className="w-4 h-4 text-blue-400" />
+                        <span>📸 عکس‌برداری با دوربین</span>
+                      </button>
                     </div>
                   </div>
                 )}

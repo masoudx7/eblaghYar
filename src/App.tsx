@@ -7,16 +7,13 @@ import { App as CapApp } from "@capacitor/app";
 import { Header } from "./components/Header";
 import { UploadZone } from "./components/UploadZone";
 import { AnalysisResult } from "./components/AnalysisResult";
-import { LegalAssistantChat } from "./components/LegalAssistantChat";
 import { HistoryDrawer } from "./components/HistoryDrawer";
 import { PrivacyNoticeModal } from "./components/PrivacyNoticeModal";
-import { ClauseInquiryModal } from "./components/ClauseInquiryModal";
 import { DefenseDraftModal } from "./components/DefenseDraftModal";
 import { CoinPurchaseModal } from "./components/CoinPurchaseModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
-  SectionQueryContext,
 } from "./types";
 import { SampleNotice } from "./sampleData";
 import { getApiUrl } from "./utils/apiHelper";
@@ -33,6 +30,8 @@ export default function App() {
   const [deviceId, setDeviceId] = useState<string>("");
   const [freeTokens, setFreeTokens] = useState<number>(2);
   const [isPremium, setIsPremium] = useState<boolean>(false);
+  const [dailyRemaining, setDailyRemaining] = useState<number>(3);
+  const [dailyUsed, setDailyUsed] = useState<number>(0);
   const [isCoinModalOpen, setIsCoinModalOpen] = useState<boolean>(false);
 
   const fetchDeviceStatus = async (devId: string) => {
@@ -46,6 +45,8 @@ export default function App() {
       if (data && data.success) {
         if (typeof data.free_tokens === "number") setFreeTokens(data.free_tokens);
         if (typeof data.is_premium === "boolean") setIsPremium(data.is_premium);
+        if (typeof data.daily_remaining === "number") setDailyRemaining(data.daily_remaining);
+        if (typeof data.daily_used === "number") setDailyUsed(data.daily_used);
       }
     } catch (e) {
       console.warn("Failed to fetch device status:", e);
@@ -70,20 +71,6 @@ export default function App() {
   const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
   const [isDefenseDraftOpen, setIsDefenseDraftOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
-
-  // Section query & clause modal state
-  const [activeSectionContext, setActiveSectionContext] = useState<SectionQueryContext | null>(null);
-  const [clauseModalState, setClauseModalState] = useState<{
-    isOpen: boolean;
-    initialClause: string;
-    initialQuestion: string;
-    sectionTitle: string;
-  }>({
-    isOpen: false,
-    initialClause: "",
-    initialQuestion: "",
-    sectionTitle: "",
-  });
 
   // 1. Device-based Anonymous Auth Initialization (UUID)
   useEffect(() => {
@@ -116,8 +103,6 @@ export default function App() {
           setIsPrivacyOpen(false);
         } else if (isDefenseDraftOpen) {
           setIsDefenseDraftOpen(false);
-        } else if (clauseModalState.isOpen) {
-          setClauseModalState((prev) => ({ ...prev, isOpen: false }));
         } else if (currentAnalysis) {
           if (window.confirm("آیا می‌خواهید از تحلیل فعلی خارج شوید؟")) {
             setCurrentAnalysis(null);
@@ -138,7 +123,7 @@ export default function App() {
         }
       };
     }
-  }, [isHistoryOpen, isPrivacyOpen, isDefenseDraftOpen, clauseModalState.isOpen, currentAnalysis]);
+  }, [isHistoryOpen, isPrivacyOpen, isDefenseDraftOpen, currentAnalysis]);
 
   // 2. Load analysis history on mount
   useEffect(() => {
@@ -222,11 +207,18 @@ export default function App() {
 
       const json = await res.json().catch(() => null);
 
-      // بررسی وضعیت ۴۰۳ و اتمام توکن‌های رایگان (LIMIT_REACHED)
-      if (res.status === 403 && json?.error === "LIMIT_REACHED") {
-        setShowPremiumPrompt(true);
-        setError(null);
-        return;
+      // بررسی وضعیت ۴۰۳: سقف روزانه اکانت دائم یا اتمام توکن رایگان
+      if (res.status === 403) {
+        if (json?.error === "DAILY_LIMIT_REACHED") {
+          setError(json?.message || "سقف روزانه اکانت دائم شما (۳ ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد.");
+          setShowPremiumPrompt(false);
+          await fetchDeviceStatus(currentDeviceId);
+          return;
+        } else if (json?.error === "LIMIT_REACHED") {
+          setShowPremiumPrompt(true);
+          setError(null);
+          return;
+        }
       }
 
       if (!res.ok || !json?.success || !json?.data) {
@@ -278,7 +270,6 @@ export default function App() {
     setCurrentFileName("");
     setError(null);
     setShowPremiumPrompt(false);
-    setActiveSectionContext(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -313,51 +304,7 @@ export default function App() {
     }
   };
 
-  const scrollToChat = () => {
-    const chatElement = document.getElementById("legal-chat-section");
-    if (chatElement) {
-      chatElement.scrollIntoView({ behavior: "smooth" });
-    }
-  };
 
-  const handleAskSectionQuestion = (
-    question: string,
-    sectionContext: { sectionTitle: string; sectionSnippet: string }
-  ) => {
-    setActiveSectionContext({
-      sectionTitle: sectionContext.sectionTitle,
-      sectionSnippet: sectionContext.sectionSnippet,
-      suggestedPrompt: question,
-    });
-    scrollToChat();
-  };
-
-  const handleOpenClauseModal = (
-    initialClause = "",
-    initialQuestion = "",
-    sectionTitle = "بند یا عبارت خاص از ابلاغیه"
-  ) => {
-    setClauseModalState({
-      isOpen: true,
-      initialClause,
-      initialQuestion,
-      sectionTitle,
-    });
-  };
-
-  const handleSendClauseToMainChat = (
-    query: string,
-    sectionContext?: { sectionTitle: string; sectionSnippet: string }
-  ) => {
-    if (sectionContext) {
-      setActiveSectionContext({
-        sectionTitle: sectionContext.sectionTitle,
-        sectionSnippet: sectionContext.sectionSnippet,
-        suggestedPrompt: query,
-      });
-    }
-    scrollToChat();
-  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF8F5] text-[#3D3B38] font-['Vazirmatn',sans-serif]">
@@ -370,6 +317,7 @@ export default function App() {
         hasActiveResult={!!currentAnalysis}
         freeTokens={freeTokens}
         isPremium={isPremium}
+        dailyRemaining={dailyRemaining}
         onOpenCoinModal={() => setIsCoinModalOpen(true)}
       />
 
@@ -462,7 +410,7 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-xs sm:text-sm text-[#6E5D2A] leading-relaxed max-w-2xl">
-                    شما از ۲ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها، تنظیم پیش‌نویس لوایح و مشورت نامحدود با دستیار حقوقی، نسخه پرمیوم را فعال فرمایید.
+                    شما از ۲ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها و تنظیم پیش‌نویس لوایح دفاعیه، نسخه پرمیوم را فعال فرمایید.
                   </p>
                 </div>
               </div>
@@ -498,18 +446,7 @@ export default function App() {
           <div className="space-y-8">
             <AnalysisResult
               analysis={currentAnalysis}
-              onOpenChat={scrollToChat}
-              onAskSectionQuestion={handleAskSectionQuestion}
-              onOpenClauseModal={handleOpenClauseModal}
               onOpenDefenseDraft={() => setIsDefenseDraftOpen(true)}
-            />
-
-            {/* AI Legal Assistant Chat */}
-            <LegalAssistantChat
-              analysis={currentAnalysis}
-              activeSectionContext={activeSectionContext}
-              onClearSectionContext={() => setActiveSectionContext(null)}
-              onOpenClauseInquiry={() => handleOpenClauseModal()}
             />
           </div>
         )}
@@ -566,22 +503,14 @@ export default function App() {
         deviceId={deviceId}
         isPremium={isPremium}
         freeTokens={freeTokens}
+        dailyRemaining={dailyRemaining}
+        dailyUsed={dailyUsed}
         onSuccessUpdate={(tokens, premium) => {
           setFreeTokens(tokens);
           setIsPremium(premium);
           setShowPremiumPrompt(false);
+          if (deviceId) fetchDeviceStatus(deviceId);
         }}
-      />
-
-      {/* Clause Inquiry Modal */}
-      <ClauseInquiryModal
-        isOpen={clauseModalState.isOpen}
-        onClose={() => setClauseModalState((prev) => ({ ...prev, isOpen: false }))}
-        analysis={currentAnalysis}
-        initialClause={clauseModalState.initialClause}
-        initialQuestion={clauseModalState.initialQuestion}
-        sectionTitle={clauseModalState.sectionTitle}
-        onSendToMainChat={handleSendClauseToMainChat}
       />
 
       {/* Defense Draft Modal */}

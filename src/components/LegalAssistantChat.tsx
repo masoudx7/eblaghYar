@@ -142,12 +142,22 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
     }
   }, [activeSectionContext]);
 
+  const userQuestionCount = messages.filter((m) => m.role === "user").length;
+  const maxQuestions = 2;
+  const remainingQuestions = Math.max(0, maxQuestions - userQuestionCount);
+  const isLimitReached = userQuestionCount >= maxQuestions;
+
   const handleSendMessage = async (
     textToSend?: string,
     sectionContextOverride?: { sectionTitle: string; sectionSnippet: string }
   ) => {
     const query = (textToSend || input).trim();
     if (!query || isLoading) return;
+
+    if (isLimitReached) {
+      setError("سقف ۲ سوال رایگان برای این ابلاغیه به پایان رسیده است. برای بررسی بیشتر لطفاً ابلاغیه جدیدی بارگذاری کنید.");
+      return;
+    }
 
     setError(null);
     const activeSection =
@@ -443,6 +453,22 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
 
       {/* Input Area */}
       <div className="p-3.5 sm:p-4 border-t border-[#E5E2D9] bg-white">
+        {/* Question Count Limit Banner */}
+        <div className={`mb-3 px-3.5 py-2 rounded-xl text-xs flex items-center justify-between border ${
+          isLimitReached 
+            ? "bg-amber-50 border-amber-200 text-amber-900 font-bold" 
+            : "bg-[#FAF8F5] border-[#E5E2D9] text-[#5C5A55]"
+        }`}>
+          <span>
+            {isLimitReached
+              ? "⚠️ سقف ۲ سوال رایگان این ابلاغیه به پایان رسیده است."
+              : `💬 سهمیه پرسش: ${userQuestionCount} از ۲ سوال استفاده شده (${remainingQuestions} سوال دیگر باقی مانده)`}
+          </span>
+          <span className="text-[10px] font-semibold text-[#7A7874]">
+            هر ابلاغیه حداکثر ۲ پرسش
+          </span>
+        </div>
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -457,14 +483,19 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="سوال حقوقی خود را اینجا بنویسید (مثلاً: آیا با این ابلاغیه من ممنوع‌الخروج می‌شوم؟ مواد قانونی دفاع من چیست؟)..."
-            className="flex-1 rounded-2xl border border-[#D1CEC4] bg-[#FBFAF7] p-3.5 text-xs sm:text-sm text-[#3D3B38] placeholder:text-[#A8A59D] focus:outline-hidden focus:ring-2 focus:ring-[#7A8C70]/30 focus:border-[#7A8C70] resize-none font-sans leading-relaxed"
+            disabled={isLimitReached || isLoading}
+            placeholder={
+              isLimitReached
+                ? "سقف ۲ سوال این ابلاغیه تمام شده است. برای تحلیل جدید، ابلاغیه جدید بارگذاری کنید."
+                : "سوال حقوقی خود را اینجا بنویسید (مثلاً: آیا با این ابلاغیه ممنوع‌الخروج می‌شوم؟)..."
+            }
+            className="flex-1 rounded-2xl border border-[#D1CEC4] bg-[#FBFAF7] p-3.5 text-xs sm:text-sm text-[#3D3B38] placeholder:text-[#A8A59D] focus:outline-hidden focus:ring-2 focus:ring-[#7A8C70]/30 focus:border-[#7A8C70] resize-none font-sans leading-relaxed disabled:opacity-60 disabled:cursor-not-allowed"
           />
 
           <button
             id="btn-send-chat"
             type="submit"
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || !input.trim() || isLimitReached}
             className="h-12 px-5 bg-[#7A8C70] hover:bg-[#68795F] disabled:bg-[#D1CEC4] text-white rounded-2xl font-bold flex items-center justify-center transition-colors shrink-0 disabled:cursor-not-allowed cursor-pointer shadow-lg shadow-[#7A8C70]/20"
           >
             {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 rotate-180" />}

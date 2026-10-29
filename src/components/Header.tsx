@@ -16,6 +16,7 @@ interface HeaderProps {
   hasActiveResult: boolean;
   freeTokens: number;
   isPremium: boolean;
+  dailyRemaining?: number;
   onOpenCoinModal: () => void;
 }
 
@@ -27,6 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
   hasActiveResult,
   freeTokens,
   isPremium,
+  dailyRemaining = 3,
   onOpenCoinModal,
 }) => {
   const toPersianDigits = (str: string | number) => {
@@ -68,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
             id="token-coin-badge"
             onClick={onOpenCoinModal}
             className="flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 sm:px-3 py-1 rounded-full shadow-xs cursor-pointer hover:bg-slate-200 transition-all group"
-            title={isPremium ? "حساب پرمیوم نامحدود فعال است" : `${freeTokens} تحلیل رایگان باقیمانده`}
+            title={isPremium ? `اکانت دائم فعال است (سهمیه امروز: ${toPersianDigits(dailyRemaining)} از ۳ ابلاغیه باقی‌مانده)` : `${freeTokens} تحلیل رایگان باقیمانده`}
           >
             <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-amber-500 flex items-center justify-center text-white shadow-xs shrink-0 group-hover:scale-105 transition-transform">
               {isPremium ? (
@@ -79,7 +81,12 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <div className="text-xs font-extrabold text-slate-800 flex items-center gap-1">
               {isPremium ? (
-                <span className="text-[11px] sm:text-xs text-slate-900 font-black">پریمیوم</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] sm:text-xs text-slate-900 font-black">دائم</span>
+                  <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-1.5 py-0.2 rounded">
+                    {toPersianDigits(dailyRemaining)} از ۳
+                  </span>
+                </div>
               ) : (
                 <div className="flex items-center gap-1">
                   <span className="text-sm font-black text-slate-900">{toPersianDigits(freeTokens)}</span>
