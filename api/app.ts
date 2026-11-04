@@ -17,6 +17,7 @@ export interface DeviceRecord {
   created_at?: string;
   daily_analyses_count?: number;
   last_analysis_date?: string;
+  fingerprint?: string;
 }
 
 export function getTodayDateString(): string {
@@ -33,28 +34,45 @@ declare global {
 }
 
 // ==========================================
-// In-Memory Fallback Store (Resilience if Supabase tables are not yet created or unreachable)
+// In-Memory Fallback Store with Fingerprint Mapping
 // ==========================================
 
 const inMemoryDevices = new Map<string, DeviceRecord>();
+const inMemoryFingerprints = new Map<string, string>(); // fingerprint -> device_id
 
-function getInMemoryDevice(deviceId: string): DeviceRecord {
-  let record = inMemoryDevices.get(deviceId);
+function getInMemoryDevice(deviceId: string, fingerprint?: string): DeviceRecord {
+  let resolvedId = deviceId;
+  if (fingerprint && inMemoryFingerprints.has(fingerprint)) {
+    resolvedId = inMemoryFingerprints.get(fingerprint)!;
+  }
+
+  let record = inMemoryDevices.get(resolvedId);
   const today = getTodayDateString();
   if (!record) {
+    // If original deviceId was passed but not found, check if it's already in map under another id
     record = {
-      device_id: deviceId,
+      device_id: resolvedId,
       is_premium: false,
       free_tokens: 2,
       premium_expires_at: null,
       created_at: new Date().toISOString(),
       daily_analyses_count: 0,
       last_analysis_date: today,
+      fingerprint: fingerprint || undefined,
     };
-    inMemoryDevices.set(deviceId, record);
-  } else if (record.last_analysis_date !== today) {
-    record.daily_analyses_count = 0;
-    record.last_analysis_date = today;
+    inMemoryDevices.set(resolvedId, record);
+    if (fingerprint) {
+      inMemoryFingerprints.set(fingerprint, resolvedId);
+    }
+  } else {
+    if (fingerprint && !record.fingerprint) {
+      record.fingerprint = fingerprint;
+      inMemoryFingerprints.set(fingerprint, resolvedId);
+    }
+    if (record.last_analysis_date !== today) {
+      record.daily_analyses_count = 0;
+      record.last_analysis_date = today;
+    }
   }
   return record;
 }
@@ -90,7 +108,7 @@ function getSupabaseClient(): SupabaseClient | null {
 }
 
 // ==========================================
-// Device-based Access Middleware
+// Device-based Access Middleware with Fingerprint Persistence
 // ==========================================
 
 export const checkDeviceAccess = async (
@@ -100,7 +118,9 @@ export const checkDeviceAccess = async (
 ) => {
   try {
     const rawDeviceId = req.headers["x-device-id"];
+    const rawFingerprint = req.headers["x-device-fingerprint"];
     const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.trim();
+    const fingerprint = (Array.isArray(rawFingerprint) ? rawFingerprint[0] : rawFingerprint)?.trim();
 
     // a. هدر x-device-id را از درخواست بخواند
     if (!deviceId) {
@@ -117,37 +137,53 @@ export const checkDeviceAccess = async (
 
     if (supabase) {
       try {
-        // b. دستگاه را در جدول devices جستجو کند
-        const { data: existingDevice, error: selectError } = await supabase
+        // b. دستگاه را در جدول devices جستجو کند (ابتدا با device_id)
+        let { data: existingDevice, error: selectError } = await supabase
           .from("devices")
           .select("*")
           .eq("device_id", deviceId)
           .maybeSingle();
 
-        if (selectError) {
-          // در صورتی که جدول devices هنوز ساخته نشده یا خطای schema cache بازگشته است
+        // اگر با device_id پیدا نشد اما fingerprint وجود داشت (حالت نصب مجدد اپ)
+        if (!existingDevice && fingerprint) {
+          const { data: fpDevice, error: fpError } = await supabase
+            .from("devices")
+            .select("*")
+            .eq("fingerprint", fingerprint)
+            .maybeSingle();
+
+          if (fpDevice) {
+            existingDevice = fpDevice;
+          }
+        }
+
+        if (selectError && selectError.code !== "PGRST116") {
           if (
             selectError.code === "PGRST205" ||
             selectError.code === "42P01" ||
             selectError.message?.includes("schema cache") ||
             selectError.message?.includes("does not exist")
           ) {
-            console.warn(
-              "[Supabase] Table 'devices' not found in database. Using in-memory device manager."
-            );
-            usedFallback = true;
-          } else if (selectError.code !== "PGRST116") {
-            console.warn("Supabase error fetching device, falling back to memory:", selectError);
             usedFallback = true;
           }
-        } else if (existingDevice) {
+        }
+
+        if (existingDevice) {
           device = existingDevice as DeviceRecord;
+          // اگر اثر انگشت دستگاه ثبت نشده بود، آن را بروزرسانی کن
+          if (fingerprint && !device.fingerprint) {
+            await supabase
+              .from("devices")
+              .update({ fingerprint })
+              .eq("device_id", device.device_id);
+          }
         } else {
-          // اگر وجود نداشت، یک رکورد جدید با free_tokens: 2 و is_premium: false بسازد
+          // اگر به هیچ وجه وجود نداشت، رکورد جدید بساز
           const { data: newDevice, error: insertError } = await supabase
             .from("devices")
             .insert({
               device_id: deviceId,
+              fingerprint: fingerprint || null,
               free_tokens: 2,
               is_premium: false,
             })
@@ -155,14 +191,12 @@ export const checkDeviceAccess = async (
             .maybeSingle();
 
           if (insertError || !newDevice) {
-            console.warn("[Supabase] Failed to insert device into table, using fallback:", insertError);
             usedFallback = true;
           } else {
             device = newDevice as DeviceRecord;
           }
         }
       } catch (dbErr) {
-        console.warn("[Supabase] Database operation threw an error, using fallback:", dbErr);
         usedFallback = true;
       }
     } else {
@@ -170,7 +204,12 @@ export const checkDeviceAccess = async (
     }
 
     if (usedFallback || !device) {
-      device = getInMemoryDevice(deviceId);
+      device = getInMemoryDevice(deviceId, fingerprint);
+    }
+
+    // اگر دستگاه از طریق اثر انگشت بازیابی شده و شناسه متفاوتی دارد، هدر کاننیکال را ارسال کن
+    if (device && device.device_id !== deviceId) {
+      res.setHeader("x-canonical-device-id", device.device_id);
     }
 
     // Check if premium has expired (1 year validity)
@@ -202,7 +241,7 @@ export const checkDeviceAccess = async (
         return res.status(403).json({
           success: false,
           error: "DAILY_LIMIT_REACHED",
-          message: "سقف روزانه اکانت دائم شما (۳ ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد.",
+          message: "سقف روزانه اکانت یک ساله شما (۳ ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد.",
           daily_used: usedToday,
           daily_limit: 3,
           daily_remaining: 0,
@@ -213,7 +252,7 @@ export const checkDeviceAccess = async (
         success: false,
         error: "LIMIT_REACHED",
         message:
-          "سقف استفاده رایگان شما (۲ تحلیل ابلاغیه) به پایان رسیده است. لطفاً جهت ادامه، سکه یا اکانت دائم تهیه فرمایید.",
+          "سقف استفاده رایگان شما (۲ تحلیل ابلاغیه) به پایان رسیده است. لطفاً جهت ادامه، سکه یا اکانت یک ساله تهیه فرمایید.",
       });
     }
 

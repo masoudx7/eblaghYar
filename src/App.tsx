@@ -22,25 +22,43 @@ import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X } from "luc
 const HISTORY_STORAGE_KEY = "judicial_notice_analysis_history";
 const DEVICE_ID_KEY = "eblaghyar_device_id";
 
+import { Device } from "@capacitor/device";
+import { Preferences } from "@capacitor/preferences";
+
 export default function App() {
   const [currentAnalysis, setCurrentAnalysis] = useState<JudicialNoticeAnalysis | null>(null);
   const [currentFileName, setCurrentFileName] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string>("");
+  const [deviceFingerprint, setDeviceFingerprint] = useState<string>("");
   const [freeTokens, setFreeTokens] = useState<number>(2);
   const [isPremium, setIsPremium] = useState<boolean>(false);
   const [dailyRemaining, setDailyRemaining] = useState<number>(3);
   const [dailyUsed, setDailyUsed] = useState<number>(0);
   const [isCoinModalOpen, setIsCoinModalOpen] = useState<boolean>(false);
 
-  const fetchDeviceStatus = async (devId: string) => {
+  const fetchDeviceStatus = async (devId: string, fp?: string) => {
     try {
+      const headers: Record<string, string> = {
+        "x-device-id": devId,
+      };
+      if (fp || deviceFingerprint) {
+        headers["x-device-fingerprint"] = fp || deviceFingerprint;
+      }
       const res = await fetch(getApiUrl("/api/device-status"), {
-        headers: {
-          "x-device-id": devId,
-        },
+        headers,
       });
+      const canonicalId = res.headers.get("x-canonical-device-id");
+      if (canonicalId && canonicalId !== devId) {
+        setDeviceId(canonicalId);
+        localStorage.setItem(DEVICE_ID_KEY, canonicalId);
+        if (Capacitor.isNativePlatform()) {
+          Preferences.set({ key: DEVICE_ID_KEY, value: canonicalId }).catch(() => {});
+        }
+        devId = canonicalId;
+      }
+
       const data = await res.json().catch(() => null);
       if (data && data.success) {
         if (typeof data.free_tokens === "number") setFreeTokens(data.free_tokens);
@@ -55,7 +73,7 @@ export default function App() {
 
   useEffect(() => {
     if (deviceId) {
-      fetchDeviceStatus(deviceId);
+      fetchDeviceStatus(deviceId, deviceFingerprint);
     }
   }, [deviceId]);
   const [showPremiumPrompt, setShowPremiumPrompt] = useState<boolean>(false);
@@ -72,20 +90,47 @@ export default function App() {
   const [isDefenseDraftOpen, setIsDefenseDraftOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
 
-  // 1. Device-based Anonymous Auth Initialization (UUID)
+  // 1. Device-based Anonymous Auth Initialization with Fingerprint & Preferences (survives reinstall)
   useEffect(() => {
-    try {
-      let storedDeviceId = localStorage.getItem(DEVICE_ID_KEY);
-      if (!storedDeviceId) {
-        storedDeviceId = uuidv4();
+    async function initDevice() {
+      try {
+        let storedDeviceId = "";
+        if (Capacitor.isNativePlatform()) {
+          const prefRes = await Preferences.get({ key: DEVICE_ID_KEY });
+          storedDeviceId = prefRes.value || "";
+        }
+        if (!storedDeviceId) {
+          storedDeviceId = localStorage.getItem(DEVICE_ID_KEY) || "";
+        }
+
+        let fingerprint = "web_browser";
+        try {
+          const info = await Device.getInfo();
+          const deviceIdInfo = await Device.getId();
+          fingerprint = `${info.manufacturer || 'unknown'}_${info.model || 'unknown'}_${info.platform || 'web'}_${deviceIdInfo.identifier || 'id'}`;
+        } catch (e) {
+          fingerprint = `web_${navigator.userAgent.substring(0, 40)}`;
+        }
+        setDeviceFingerprint(fingerprint);
+
+        if (!storedDeviceId) {
+          storedDeviceId = uuidv4();
+        }
+
         localStorage.setItem(DEVICE_ID_KEY, storedDeviceId);
+        if (Capacitor.isNativePlatform()) {
+          await Preferences.set({ key: DEVICE_ID_KEY, value: storedDeviceId });
+        }
+
+        setDeviceId(storedDeviceId);
+        fetchDeviceStatus(storedDeviceId, fingerprint);
+      } catch (e) {
+        console.error("Failed to initialize device ID/Preferences:", e);
+        const generated = uuidv4();
+        setDeviceId(generated);
       }
-      setDeviceId(storedDeviceId);
-    } catch (e) {
-      console.error("Failed to access localStorage for deviceId:", e);
-      const generated = uuidv4();
-      setDeviceId(generated);
     }
+    initDevice();
   }, []);
 
   // 1.1 Capacitor native platform initialization (StatusBar, SplashScreen, BackButton)
@@ -195,12 +240,13 @@ export default function App() {
         setDeviceId(currentDeviceId);
       }
 
-      // ارسال درخواست به همراه هدر x-device-id
+      // ارسال درخواست به همراه هدر x-device-id و x-device-fingerprint
       const res = await fetch(getApiUrl("/api/analyze"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-device-id": currentDeviceId,
+          ...(deviceFingerprint ? { "x-device-fingerprint": deviceFingerprint } : {}),
         },
         body: JSON.stringify({ fileBase64, mimeType, rawText }),
       });
@@ -210,7 +256,7 @@ export default function App() {
       // بررسی وضعیت ۴۰۳: سقف روزانه اکانت دائم یا اتمام توکن رایگان
       if (res.status === 403) {
         if (json?.error === "DAILY_LIMIT_REACHED") {
-          setError(json?.message || "سقف روزانه اکانت دائم شما (۳ ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد.");
+          setError(json?.message || "سقف روزانه اکانت یک ساله شما (۳ ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد.");
           setShowPremiumPrompt(false);
           await fetchDeviceStatus(currentDeviceId);
           return;

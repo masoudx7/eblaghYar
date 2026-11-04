@@ -50,7 +50,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
 
       if (result && result.success) {
         if (productType === 'premium') {
-          setSuccessMessage("اکانت دائم (سقف ۳ تحلیل ابلاغیه در هر روز) با موفقیت فعال شد!");
+          setSuccessMessage("اکانت یک ساله (سقف ۳ تحلیل ابلاغیه در هر روز) با موفقیت فعال شد!");
           onSuccessUpdate(freeTokens, true);
         } else if (count) {
           setSuccessMessage(`با موفقیت ${toPersianDigits(count)} سکه (${packageName}) به حساب شما اضافه شد!`);
@@ -84,7 +84,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
             <div>
               <h2 className="text-lg sm:text-xl font-black text-[#3D3B38]">خرید سکه و ارتقای حساب</h2>
               <p className="text-xs text-[#7A7874] mt-0.5">
-                موجودی فعلی: {toPersianDigits(freeTokens)} سکه {isPremium ? `| اکانت دائم فعال 👑 (سهمیه امروز: ${toPersianDigits(dailyRemaining)} از ۳)` : ""}
+                موجودی فعلی: {toPersianDigits(freeTokens)} سکه {isPremium ? `| اکانت یک ساله فعال 👑 (سهمیه امروز: ${toPersianDigits(dailyRemaining)} از ۳)` : ""}
               </p>
             </div>
           </div>
@@ -179,7 +179,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
             </div>
           </div>
 
-          {/* اکانت دائم با محدودیت ۳ ابلاغ در روز */}
+          {/* اکانت یک ساله با محدودیت ۳ ابلاغ در روز */}
           <div className="p-4 rounded-2xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50 transition-all flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
@@ -187,10 +187,10 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-black text-slate-900 text-sm">اکانت دائم (سقف ۳ ابلاغ در روز)</span>
-                  <span className="text-[10px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-full">دائم • ۳ ابلاغ در روز</span>
+                  <span className="font-black text-slate-900 text-sm">اکانت یک ساله (سقف ۳ ابلاغ در روز)</span>
+                  <span className="text-[10px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-full">یک ساله • ۳ ابلاغ در روز</span>
                 </div>
-                <p className="text-xs text-slate-600 mt-0.5">تحلیل روزانه تا ۳ ابلاغیه در هر روز بدون محدودیت زمانی + تنظیم پیش‌نویس لوایح</p>
+                <p className="text-xs text-slate-600 mt-0.5">تحلیل روزانه تا ۳ ابلاغیه در هر روز در مدت ۱ سال + تنظیم پیش‌نویس لوایح</p>
               </div>
             </div>
             <button
@@ -199,7 +199,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
               className="w-full sm:w-auto py-3 px-6 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
             >
               <Crown className="w-4 h-4"/>
-              <span>{isPremium ? "اکانت دائم فعال است (۳ ابلاغ/روز) 👑" : loadingType === "premium" ? "در حال اتصال..." : "خرید اکانت دائم (۳۹۹,۰۰۰ تومان)"}</span>
+              <span>{isPremium ? "اکانت یک ساله فعال است (۳ ابلاغ/روز) 👑" : loadingType === "premium" ? "در حال اتصال..." : "خرید اکانت یک ساله (۳۹۹,۰۰۰ تومان)"}</span>
             </button>
           </div>
         </div>
