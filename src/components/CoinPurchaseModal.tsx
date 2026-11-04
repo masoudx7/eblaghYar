@@ -1,8 +1,8 @@
 // فایل: src/components/CoinPurchaseModal.tsx
 
 import React, { useState } from "react";
-import { Coins, Crown, Check, Sparkles, X, Store, Globe, ShieldCheck } from "lucide-react";
-import { processDynamicPayment, getActiveStore, setActiveStore, StoreType } from "../services/paymentRouter";
+import { Coins, Crown, Check, Sparkles, X, ShieldCheck } from "lucide-react";
+import { processDynamicPayment } from "../services/paymentRouter";
 
 interface CoinPurchaseModalProps {
   isOpen: boolean;
@@ -27,7 +27,6 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
 }) => {
   const [loadingType, setLoadingType] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [currentStore, setCurrentStore] = useState<StoreType>(getActiveStore());
 
   if (!isOpen) return null;
 
@@ -36,17 +35,13 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
     return String(str).replace(/\d/g, (d) => persian[parseInt(d, 10)]);
   };
 
-  const handleStoreChange = (store: StoreType) => {
-    setActiveStore(store);
-    setCurrentStore(store);
-  };
-
   const handlePurchase = async (productType: 'coins_5' | 'coins_15' | 'premium', count?: number, packageName?: string) => {
     try {
       setLoadingType(productType);
       setSuccessMessage(null);
 
       const result = await processDynamicPayment(productType, deviceId);
+
 
       if (result && result.success) {
         if (productType === 'premium') {
@@ -93,43 +88,8 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
           </button>
         </div>
 
-        {/* Dynamic Gateway Selector */}
-        <div className="mb-6 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <Store className="w-4 h-4 text-blue-600"/>
-              <span>درگاه پرداخت هوشمند:</span>
-            </span>
-            <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-md">
-              {currentStore === 'bazaar' ? 'کافه بازار' : 'وب (زرین‌پال)'}
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => handleStoreChange('bazaar')}
-              className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                currentStore === 'bazaar'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              کافه بازار
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStoreChange('web')}
-              className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                currentStore === 'web'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              وب (زرین‌پال)
-            </button>
-          </div>
-        </div>
-
+        {/* Gateway removed - only Bazaar supported */}
+        
         {successMessage && (
           <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-sm font-bold flex items-center gap-2 animate-in fade-in">
             <Check className="w-5 h-5 text-emerald-600 shrink-0"/>
@@ -190,7 +150,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
                   <span className="font-black text-slate-900 text-sm">اکانت یک ساله (سقف ۳ ابلاغ در روز)</span>
                   <span className="text-[10px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-full">یک ساله • ۳ ابلاغ در روز</span>
                 </div>
-                <p className="text-xs text-slate-600 mt-0.5">تحلیل روزانه تا ۳ ابلاغیه در هر روز در مدت ۱ سال + تنظیم پیش‌نویس لوایح</p>
+                <p className="text-xs text-slate-600 mt-0.5">تحلیل روزانه تا ۳ ابلاغیه در هر روز در مدت ۱ سال</p>
               </div>
             </div>
             <button
@@ -206,7 +166,7 @@ export const CoinPurchaseModal: React.FC<CoinPurchaseModalProps> = ({
 
         <div className="text-center text-[11px] text-[#7A7874] flex items-center justify-center gap-1.5">
           <ShieldCheck className="w-4 h-4 text-emerald-600"/>
-          <span>پرداخت امن متناسب با پلتفرم انتخابی شما (مایکت، کافه بازار یا زرین‌پال)</span>
+          <span>پرداخت امن از طریق کافه بازار</span>
         </div>
       </div>
     </div>
