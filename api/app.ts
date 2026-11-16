@@ -107,6 +107,37 @@ function getSupabaseClient(): SupabaseClient | null {
   return supabaseClient;
 }
 
+function getSupabaseAuthClient(accessToken?: string): SupabaseClient | null {
+  const supabaseUrl = process.env.SUPABASE_URL?.trim();
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY?.trim();
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
+  }
+
+  try {
+    return createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+      ...(accessToken
+        ? {
+            global: {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+              },
+            },
+          }
+        : {}),
+    });
+  } catch (e) {
+    console.warn("[Supabase Auth] Failed to initialize client:", e);
+    return null;
+  }
+}
+
 // ==========================================
 // Device-based Access Middleware with Fingerprint Persistence
 // ==========================================
@@ -411,7 +442,10 @@ const app = express();
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-device-id, X-Requested-With");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, x-device-id, x-device-fingerprint, x-entitlement-token, X-Requested-With"
+  );
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -454,13 +488,27 @@ apiRouter.get("/health", (req, res) => {
 // API Endpoints
 // ==========================================
 
-// 1. Analyze Judicial Notice (with checkDeviceAccess middleware)
-apiRouter.post("/analyze", checkDeviceAccess, async (req, res) => {
+interface RunAnalysisResult {
+  ok: boolean;
+  data?: any;
+  status?: number;
+  body?: Record<string, any>;
+}
+
+async function runAnalysis(input: {
+  fileBase64?: string | null;
+  mimeType?: string | null;
+  rawText?: string | null;
+}): Promise<RunAnalysisResult> {
   try {
-    const { fileBase64, mimeType, rawText } = req.body || {};
+    const { fileBase64, mimeType, rawText } = input || {};
 
     if (!fileBase64 && !rawText) {
-      return res.status(400).json({ error: "لطفاً فایل پی‌دی‌اف، تصویر ابلاغیه یا متن آن را ارسال کنید." });
+      return {
+        ok: false,
+        status: 400,
+        body: { error: "لطفاً فایل پی‌دی‌اف، تصویر ابلاغیه یا متن آن را ارسال کنید." },
+      };
     }
 
     const ai = getGeminiClient();
@@ -633,12 +681,65 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
     const parsedData = cleanAndParseJSON(responseText);
 
     if (parsedData.isRelevant === false) {
-      return res.status(400).json({
-        success: false,
-        error: "IRRELEVANT_CONTENT",
-        message: parsedData.rejectionReason || "متن یا تصویر ارسالی مرتبط با ابلاغیه‌ها، اخطاریه‌ها یا اسناد قضایی نیست. لطفاً تصویر ابلاغیه سامانه ثنا، دادنامه یا اخطاریه قضایی معتبر را ارسال کنید.",
-      });
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          success: false,
+          error: "IRRELEVANT_CONTENT",
+          message: parsedData.rejectionReason || "متن یا تصویر ارسالی مرتبط با ابلاغیه‌ها، اخطاریه‌ها یا اسناد قضایی نیست. لطفاً تصویر ابلاغیه سامانه ثنا، دادنامه یا اخطاریه قضایی معتبر را ارسال کنید.",
+        },
+      };
     }
+
+    return { ok: true, data: parsedData };
+  } catch (error: any) {
+    console.error("Error analyzing notice:", error);
+    const errMsg = String(error?.message || "");
+    const isUnavailable =
+      error?.code === 503 ||
+      error?.status === "UNAVAILABLE" ||
+      errMsg.includes("503") ||
+      errMsg.includes("high demand") ||
+      errMsg.includes("UNAVAILABLE") ||
+      errMsg.includes("429");
+
+    return {
+      ok: false,
+      status: isUnavailable ? 503 : 500,
+      body: {
+        success: false,
+        isTemporary: isUnavailable,
+        error: isUnavailable
+          ? "سرویس هوش مصنوعی در حال حاضر با ترافیک بالایی روبرو است. لطفاً چند لحظه دیگر روی دکمه «تلاش مجدد» کلیک کنید."
+          : error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+      },
+    };
+  }
+}
+
+const requireLegacyAnalyzeEnabled: express.RequestHandler = (_req, res, next) => {
+  if (String(process.env.WEB_ONLY || "").trim().toLowerCase() === "true") {
+    return res.status(403).json({
+      success: false,
+      error: "WEB_ONLY_MODE",
+      message: "این مسیر در نسخه وب غیرفعال است. لطفاً از مسیر تحلیل وب استفاده کنید.",
+    });
+  }
+  next();
+};
+
+// 1. Analyze Judicial Notice (with checkDeviceAccess middleware)
+apiRouter.post("/analyze", requireLegacyAnalyzeEnabled, checkDeviceAccess, async (req, res) => {
+  try {
+    const { fileBase64, mimeType, rawText } = req.body || {};
+
+    const analysisResult = await runAnalysis({ fileBase64, mimeType, rawText });
+    if (!analysisResult.ok) {
+      return res.status(analysisResult.status || 500).json(analysisResult.body || { success: false });
+    }
+
+    const parsedData = analysisResult.data;
 
     // مدیریت مصرف و سهمیه
     if (req.device && req.deviceId) {
@@ -708,21 +809,9 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
     return res.json({ success: true, data: parsedData });
   } catch (error: any) {
     console.error("Error analyzing notice:", error);
-    const errMsg = String(error?.message || "");
-    const isUnavailable =
-      error?.code === 503 ||
-      error?.status === "UNAVAILABLE" ||
-      errMsg.includes("503") ||
-      errMsg.includes("high demand") ||
-      errMsg.includes("UNAVAILABLE") ||
-      errMsg.includes("429");
-
-    return res.status(isUnavailable ? 503 : 500).json({
+    return res.status(500).json({
       success: false,
-      isTemporary: isUnavailable,
-      error: isUnavailable
-        ? "سرویس هوش مصنوعی در حال حاضر با ترافیک بالایی روبرو است. لطفاً چند لحظه دیگر روی دکمه «تلاش مجدد» کلیک کنید."
-        : error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+      error: error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
     });
   }
 });
@@ -836,8 +925,19 @@ apiRouter.get("/device-status", async (req, res) => {
   }
 });
 
+const requireLegacyPaymentEnabled: express.RequestHandler = (_req, res, next) => {
+  if (String(process.env.DISABLE_LEGACY_PAYMENT || "").trim().toLowerCase() === "true") {
+    return res.status(403).json({
+      success: false,
+      error: "LEGACY_PAYMENT_DISABLED",
+      message: "این مسیر پرداخت غیرفعال شده است. لطفاً از درگاه پرداخت نسخه وب استفاده کنید.",
+    });
+  }
+  next();
+};
+
 // 2. Activate Premium Endpoint
-apiRouter.post("/activate-premium", async (req, res) => {
+apiRouter.post("/activate-premium", requireLegacyPaymentEnabled, async (req, res) => {
   try {
     const { deviceId, purchaseToken } = req.body || {};
 
@@ -898,7 +998,7 @@ apiRouter.post("/activate-premium", async (req, res) => {
 });
 
 // 2.5. Buy Coins Endpoint
-apiRouter.post("/buy-coins", async (req, res) => {
+apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
   try {
     const { deviceId, coinCount } = req.body || {};
     const count = parseInt(coinCount, 10) || 5;
@@ -1185,7 +1285,7 @@ ${sectionPromptSnippet}
 
 const zarinpalMockPending = new Map<string, { deviceId: string; productType: string }>();
 
-apiRouter.post("/payment/zarinpal/request", async (req, res) => {
+apiRouter.post("/payment/zarinpal/request", requireLegacyPaymentEnabled, async (req, res) => {
   try {
     const { productType, deviceId } = req.body || {};
     if (!deviceId || !productType) {
@@ -1236,7 +1336,7 @@ apiRouter.post("/payment/zarinpal/request", async (req, res) => {
   }
 });
 
-apiRouter.get("/payment/zarinpal/verify", async (req, res) => {
+apiRouter.get("/payment/zarinpal/verify", requireLegacyPaymentEnabled, async (req, res) => {
   try {
     const { Status, deviceId, productType } = req.query || {};
     if (Status !== "OK") {
@@ -1289,6 +1389,1403 @@ apiRouter.get("/payment/zarinpal/verify", async (req, res) => {
   } catch (e: any) {
     console.error("Zarinpal verify error:", e);
     return res.redirect(`/?payment=error&message=${encodeURIComponent(e.message)}`);
+  }
+});
+
+// ==========================================
+// Web Products Configuration & Web Auth Routes (/api/web/auth/*)
+// ==========================================
+
+// TODO: مقادیر مبلغ (به ریال) جایگزین موقت هستند؛ پیش از انتشار نهایی با قیمت قطعی جایگزین شوند
+export const WEB_PRODUCTS = {
+  single: {
+    amountRials: 290000, // TODO: قیمت نهایی تک تحلیل وب (ریال)
+    credits: 1,
+    label: "تحلیل تکی ابلاغیه (نسخه وب)",
+  },
+  pack_10: {
+    amountRials: 1990000, // TODO: قیمت نهایی بسته ۱۰ عددی وب (ریال)
+    credits: 10,
+    label: "بسته ۱۰ عددی تحلیل ابلاغیه (نسخه وب)",
+  },
+  annual: {
+    amountRials: 3990000, // TODO: قیمت نهایی اکانت یک‌ساله وب (ریال)
+    dailyLimit: 3,
+    durationDays: 365,
+    label: "اشتراک یک‌ساله وب ابلاغ‌یار (تا ۳ تحلیل در روز)",
+  },
+} as const;
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEVICE_ID_REGEX = /^[a-zA-Z0-9_-]{8,128}$/;
+const AUTHORITY_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
+const ALLOWED_WEB_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
+
+function getClientIp(req: express.Request): string {
+  const cfIp = req.headers["cf-connecting-ip"];
+  const rawCf = (Array.isArray(cfIp) ? cfIp[0] : cfIp)?.trim();
+  if (rawCf) return rawCf;
+
+  const xff = req.headers["x-forwarded-for"];
+  const rawXff = (Array.isArray(xff) ? xff[0] : xff)?.trim();
+  if (rawXff) {
+    const firstIp = rawXff.split(",")[0]?.trim();
+    if (firstIp) return firstIp;
+  }
+
+  const xRealIp = req.headers["x-real-ip"];
+  const rawReal = (Array.isArray(xRealIp) ? xRealIp[0] : xRealIp)?.trim();
+  if (rawReal) return rawReal;
+
+  return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+function createIpRateLimiter(options: {
+  keyPrefix: string;
+  windowMs: number;
+  maxRequests: number;
+  message: string;
+}): express.RequestHandler {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+
+  return (req, res, next) => {
+    if (req.method === "OPTIONS") {
+      return next();
+    }
+
+    const now = Date.now();
+    if (hits.size > 2000) {
+      for (const [key, entry] of hits.entries()) {
+        if (entry.resetAt <= now) {
+          hits.delete(key);
+        }
+      }
+    }
+
+    const ip = getClientIp(req);
+    const bucketKey = `${options.keyPrefix}:${ip}`;
+    const existing = hits.get(bucketKey);
+
+    let count = 1;
+    let resetAt = now + options.windowMs;
+
+    if (existing && existing.resetAt > now) {
+      count = existing.count + 1;
+      resetAt = existing.resetAt;
+    }
+
+    hits.set(bucketKey, { count, resetAt });
+
+    const remaining = Math.max(0, options.maxRequests - count);
+    const retryAfterSec = Math.max(1, Math.ceil((resetAt - now) / 1000));
+
+    res.setHeader("X-RateLimit-Limit", String(options.maxRequests));
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
+    res.setHeader("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
+
+    if (count > options.maxRequests) {
+      res.setHeader("Retry-After", String(retryAfterSec));
+      return res.status(429).json({
+        success: false,
+        error: "RATE_LIMIT_EXCEEDED",
+        message: options.message,
+      });
+    }
+
+    next();
+  };
+}
+
+const webAuthRateLimiter = createIpRateLimiter({
+  keyPrefix: "web_auth",
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 45,
+  message: "تعداد درخواست‌های احراز هویت از این نشانی بیش از حد مجاز است. لطفاً دقایقی دیگر تلاش کنید.",
+});
+
+const webAuthMutationRateLimiter = createIpRateLimiter({
+  keyPrefix: "web_auth_mut",
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 15,
+  message: "تعداد تلاش‌های ورود یا ثبت‌نام بیش از حد مجاز است. لطفاً ۱۵ دقیقه دیگر دوباره امتحان کنید.",
+});
+
+const webPaymentRateLimiter = createIpRateLimiter({
+  keyPrefix: "web_pay",
+  windowMs: 15 * 60 * 1000,
+  maxRequests: 30,
+  message: "تعداد درخواست‌های پرداخت از این نشانی بیش از حد مجاز است. لطفاً کمی بعد تلاش کنید.",
+});
+
+const webAnalyzeRateLimiter = createIpRateLimiter({
+  keyPrefix: "web_analyze",
+  windowMs: 10 * 60 * 1000,
+  maxRequests: 20,
+  message: "تعداد درخواست‌های تحلیل در بازه زمانی کوتاه بیش از حد مجاز است. لطفاً دقایقی دیگر تلاش کنید.",
+});
+
+apiRouter.use("/web/auth", webAuthRateLimiter);
+apiRouter.use("/web/payment", webPaymentRateLimiter);
+apiRouter.use("/web/analyze", webAnalyzeRateLimiter);
+
+function getWebRedirectBaseUrl(req: express.Request): string {
+  const envUrl = process.env.APP_URL?.trim();
+  if (envUrl && envUrl !== "MY_APP_URL") {
+    return envUrl.replace(/\/+$/, "");
+  }
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const rawProto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const proto = (rawProto ? rawProto.split(",")[0].trim() : "") || req.protocol || "https";
+
+  const forwardedHost = req.headers["x-forwarded-host"];
+  const rawHost = Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost;
+  const host = (rawHost ? rawHost.split(",")[0].trim() : "") || req.get("host");
+
+  return `${proto}://${host}`;
+}
+
+function translateSupabaseAuthError(err: any, fallback = "خطا در عملیات احراز هویت. لطفاً دوباره تلاش کنید."): string {
+  const msg = String(err?.message || err?.error_description || "").toLowerCase();
+  if (msg.includes("invalid login credentials")) {
+    return "ایمیل یا رمز عبور واردشده اشتباه است.";
+  }
+  if (msg.includes("email not confirmed")) {
+    return "ایمیل شما هنوز تأیید نشده است. لطفاً صندوق ورودی یا پوشه اسپم ایمیل خود را بررسی کرده و روی لینک تأیید کلیک کنید.";
+  }
+  if (msg.includes("user already registered") || msg.includes("already been registered")) {
+    return "حساب کاربری با این ایمیل قبلاً ثبت شده است. لطفاً وارد شوید یا از گزینه فراموشی رمز استفاده کنید.";
+  }
+  if (msg.includes("password should be at least")) {
+    return "رمز عبور باید حداقل ۸ کاراکتر باشد.";
+  }
+  if (msg.includes("unable to validate email address") || msg.includes("invalid email")) {
+    return "فرمت ایمیل واردشده معتبر نیست.";
+  }
+  if (
+    msg.includes("rate limit") ||
+    msg.includes("over_email_send_rate_limit") ||
+    msg.includes("only request this after") ||
+    msg.includes("too many requests")
+  ) {
+    return "تعداد درخواست‌ها بیش از حد مجاز است. لطفاً چند دقیقه دیگر دوباره تلاش کنید.";
+  }
+  if (msg.includes("token has expired") || msg.includes("invalid jwt") || msg.includes("invalid refresh token") || msg.includes("refresh token not found")) {
+    return "نشست کاربری شما منقضی یا نامعتبر است. لطفاً دوباره وارد شوید.";
+  }
+  if (msg.includes("signup is disabled")) {
+    return "ثبت‌نام کاربران جدید در حال حاضر غیرفعال است.";
+  }
+  return fallback;
+}
+
+function formatWebUserPayload(
+  authUser: { id: string; email?: string | null; user_metadata?: any },
+  profile: any
+) {
+  const today = getTodayDateString();
+  const annualExpiresAt: string | null = profile?.annual_expires_at || null;
+  const isAnnualActive = Boolean(annualExpiresAt && new Date(annualExpiresAt) > new Date());
+  const dailyLimit = WEB_PRODUCTS.annual.dailyLimit;
+  const dailyUsed = profile?.last_analysis_date === today ? Number(profile?.daily_analyses_count || 0) : 0;
+  const dailyRemaining = Math.max(0, dailyLimit - dailyUsed);
+
+  return {
+    id: authUser.id,
+    email: profile?.email || authUser.email || "",
+    full_name: profile?.full_name || authUser.user_metadata?.full_name || authUser.user_metadata?.name || "",
+    credits: Number(profile?.credits ?? 0),
+    annual_expires_at: annualExpiresAt,
+    is_annual_active: isAnnualActive,
+    daily_used: dailyUsed,
+    daily_limit: dailyLimit,
+    daily_remaining: dailyRemaining,
+    created_at: profile?.created_at || null,
+  };
+}
+
+async function fetchOrEnsureWebProfile(authUser: { id: string; email?: string | null; user_metadata?: any }) {
+  const serviceClient = getSupabaseClient();
+  if (!serviceClient) {
+    return formatWebUserPayload(authUser, null);
+  }
+
+  const { data: existingProfile } = await serviceClient
+    .from("profiles")
+    .select("*")
+    .eq("id", authUser.id)
+    .maybeSingle();
+
+  if (existingProfile) {
+    return formatWebUserPayload(authUser, existingProfile);
+  }
+
+  const fullName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || null;
+  const { data: insertedProfile } = await serviceClient
+    .from("profiles")
+    .upsert(
+      {
+        id: authUser.id,
+        email: authUser.email || null,
+        full_name: fullName,
+      },
+      { onConflict: "id" }
+    )
+    .select("*")
+    .maybeSingle();
+
+  return formatWebUserPayload(authUser, insertedProfile || { full_name: fullName, credits: 0 });
+}
+
+function extractBearerToken(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || typeof authHeader !== "string") return null;
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+}
+
+// POST /api/web/auth/register
+apiRouter.post("/web/auth/register", webAuthMutationRateLimiter, async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است (SUPABASE_ANON_KEY تنظیم نشده است).",
+      });
+    }
+
+    const rawName = String(req.body?.fullName ?? req.body?.full_name ?? "").trim();
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    const password = String(req.body?.password ?? "");
+
+    if (!rawName || rawName.length < 2 || rawName.length > 120) {
+      return res.status(400).json({
+        success: false,
+        error: "نام و نام خانوادگی باید بین ۲ تا ۱۲۰ کاراکتر باشد.",
+      });
+    }
+    if (!email || email.length > 254 || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        error: "لطفاً یک نشانی ایمیل معتبر وارد کنید.",
+      });
+    }
+    if (!password || password.length < 8 || password.length > 128) {
+      return res.status(400).json({
+        success: false,
+        error: "رمز عبور باید بین ۸ تا ۱۲۸ کاراکتر باشد.",
+      });
+    }
+
+    const baseUrl = getWebRedirectBaseUrl(req);
+    const { data, error } = await authClient.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: rawName,
+        },
+        emailRedirectTo: `${baseUrl}/?auth=verified`,
+      },
+    });
+
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "ثبت‌نام انجام نشد. لطفاً اطلاعات را بررسی کنید."),
+      });
+    }
+
+    // Supabase returns empty identities array when email already exists and confirmation is enabled
+    if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+      return res.status(409).json({
+        success: false,
+        error: "حساب کاربری با این ایمیل قبلاً ثبت شده است. لطفاً وارد شوید یا از بخش بازیابی رمز استفاده کنید.",
+      });
+    }
+
+    if (data.session && data.user) {
+      const userPayload = await fetchOrEnsureWebProfile(data.user);
+      return res.status(201).json({
+        success: true,
+        requiresEmailVerification: false,
+        message: "ثبت‌نام با موفقیت انجام شد.",
+        session: {
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+          expires_at: data.session.expires_at ?? null,
+        },
+        user: userPayload,
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      requiresEmailVerification: true,
+      message: "ثبت‌نام با موفقیت انجام شد. لینک تأیید به ایمیل شما ارسال گردید؛ لطفاً صندوق ورودی (و پوشه اسپم) را بررسی کرده و پس از تأیید وارد شوید.",
+      session: null,
+      user: null,
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Register Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در فرآیند ثبت‌نام. لطفاً لحظاتی دیگر تلاش کنید.",
+    });
+  }
+});
+
+// POST /api/web/auth/login
+apiRouter.post("/web/auth/login", webAuthMutationRateLimiter, async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است (SUPABASE_ANON_KEY تنظیم نشده است).",
+      });
+    }
+
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    const password = String(req.body?.password ?? "");
+
+    if (!email || email.length > 254 || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        error: "لطفاً یک نشانی ایمیل معتبر وارد کنید.",
+      });
+    }
+    if (!password || password.length > 128) {
+      return res.status(400).json({
+        success: false,
+        error: "لطفاً رمز عبور معتبر را وارد کنید.",
+      });
+    }
+
+    const { data, error } = await authClient.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error || !data.session || !data.user) {
+      return res.status(401).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "ایمیل یا رمز عبور اشتباه است."),
+      });
+    }
+
+    const userPayload = await fetchOrEnsureWebProfile(data.user);
+
+    return res.json({
+      success: true,
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_at: data.session.expires_at ?? null,
+      },
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Login Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در ورود به حساب کاربری.",
+    });
+  }
+});
+
+// POST /api/web/auth/refresh
+apiRouter.post("/web/auth/refresh", async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است.",
+      });
+    }
+
+    const refreshToken = String(req.body?.refresh_token ?? req.body?.refreshToken ?? "").trim();
+    if (!refreshToken || refreshToken.length > 2048) {
+      return res.status(400).json({
+        success: false,
+        error: "توکن بازیابی (refresh_token) معتبر ارسال نشده است.",
+      });
+    }
+
+    const { data, error } = await authClient.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
+
+    if (error || !data.session || !data.user) {
+      return res.status(401).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "نشست کاربری شما منقضی شده است. لطفاً مجدداً وارد شوید."),
+      });
+    }
+
+    const userPayload = await fetchOrEnsureWebProfile(data.user);
+
+    return res.json({
+      success: true,
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_at: data.session.expires_at ?? null,
+      },
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Refresh Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در تمدید نشست کاربری.",
+    });
+  }
+});
+
+// POST /api/web/auth/logout
+apiRouter.post("/web/auth/logout", async (req, res) => {
+  try {
+    const token = extractBearerToken(req) || String(req.body?.access_token ?? "").trim();
+    const serviceClient = getSupabaseClient();
+
+    if (token && serviceClient) {
+      await serviceClient.auth.admin.signOut(token).catch(() => {});
+    }
+
+    return res.json({
+      success: true,
+      message: "خروج از حساب کاربری با موفقیت انجام شد.",
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Logout Error]:", err);
+    return res.json({
+      success: true,
+      message: "خروج انجام شد.",
+    });
+  }
+});
+
+// POST /api/web/auth/forgot-password
+apiRouter.post("/web/auth/forgot-password", webAuthMutationRateLimiter, async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است.",
+      });
+    }
+
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    if (!email || email.length > 254 || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        error: "لطفاً یک نشانی ایمیل معتبر وارد کنید.",
+      });
+    }
+
+    const baseUrl = getWebRedirectBaseUrl(req);
+    const { error } = await authClient.auth.resetPasswordForEmail(email, {
+      redirectTo: `${baseUrl}/?auth=recovery`,
+    });
+
+    if (error) {
+      const msg = String(error.message || "").toLowerCase();
+      if (msg.includes("rate limit") || msg.includes("only request this after") || msg.includes("too many requests")) {
+        return res.status(429).json({
+          success: false,
+          error: "تعداد درخواست ارسال ایمیل بازیابی بیش از حد مجاز است. لطفاً کمی بعد تلاش کنید.",
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "ارسال ایمیل بازیابی رمز عبور با خطا مواجه شد."),
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "لینک بازیابی رمز عبور به ایمیل شما ارسال شد. لطفاً صندوق ورودی و پوشه اسپم خود را بررسی کنید.",
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Forgot Password Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در ارسال ایمیل بازیابی رمز عبور.",
+    });
+  }
+});
+
+// GET /api/web/auth/me
+apiRouter.get("/web/auth/me", async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است.",
+      });
+    }
+
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: "توکن احراز هویت ارسال نشده است.",
+      });
+    }
+
+    const { data, error } = await authClient.auth.getUser(token);
+    if (error || !data?.user) {
+      return res.status(401).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "نشست کاربری نامعتبر یا منقضی است. لطفاً دوباره وارد شوید."),
+      });
+    }
+
+    const userPayload = await fetchOrEnsureWebProfile(data.user);
+
+    return res.json({
+      success: true,
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Me Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در دریافت اطلاعات حساب کاربری.",
+    });
+  }
+});
+
+// ==========================================
+// Web Zarinpal Payment Routes (/api/web/payment/*)
+// ==========================================
+
+type WebProductKey = keyof typeof WEB_PRODUCTS;
+
+function isValidWebProduct(val: unknown): val is WebProductKey {
+  return typeof val === "string" && Object.prototype.hasOwnProperty.call(WEB_PRODUCTS, val);
+}
+
+function getConfiguredZarinpalMerchantId(): string | null {
+  const merchantId = process.env.ZARINPAL_MERCHANT_ID?.trim();
+  if (!merchantId || merchantId === "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+    return null;
+  }
+  return merchantId;
+}
+
+async function grantWebPaymentEntitlement(
+  serviceClient: SupabaseClient,
+  payment: { id: string; user_id?: string | null; product: string }
+): Promise<void> {
+  if (payment.product === "single") {
+    // single entitlement is already ready via payments.entitlement_token (entitlement_used = false)
+    return;
+  }
+
+  if (!payment.user_id) {
+    console.error("[Web Payment] Paid pack/annual order missing user_id:", payment.id);
+    return;
+  }
+
+  const userId = payment.user_id;
+
+  // Ensure profile row exists before updating
+  await serviceClient
+    .from("profiles")
+    .upsert({ id: userId }, { onConflict: "id", ignoreDuplicates: true });
+
+  if (payment.product === "pack_10") {
+    const creditsDelta = WEB_PRODUCTS.pack_10.credits;
+    // Try PostgreSQL atomic RPC first
+    const { error: rpcError } = await serviceClient.rpc("increment_profile_credits", {
+      p_user_id: userId,
+      p_delta: creditsDelta,
+    });
+
+    if (!rpcError) {
+      return;
+    }
+
+    // Fallback: optimistic CAS update loop so concurrent requests never lose credits
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data: prof } = await serviceClient
+        .from("profiles")
+        .select("credits")
+        .eq("id", userId)
+        .maybeSingle();
+
+      const oldCredits = Number(prof?.credits ?? 0);
+      const { data: updated } = await serviceClient
+        .from("profiles")
+        .update({ credits: oldCredits + creditsDelta })
+        .eq("id", userId)
+        .eq("credits", oldCredits)
+        .select("credits")
+        .maybeSingle();
+
+      if (updated) {
+        return;
+      }
+    }
+    throw new Error("خطا در افزایش اتمیک اعتبار پروفایل.");
+  }
+
+  if (payment.product === "annual") {
+    const { data: prof } = await serviceClient
+      .from("profiles")
+      .select("annual_expires_at")
+      .eq("id", userId)
+      .maybeSingle();
+
+    const nowMs = Date.now();
+    const existingMs = prof?.annual_expires_at ? new Date(prof.annual_expires_at).getTime() : 0;
+    const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
+    const newExpiresAt = new Date(
+      baseMs + WEB_PRODUCTS.annual.durationDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    const { error: updateErr } = await serviceClient
+      .from("profiles")
+      .update({ annual_expires_at: newExpiresAt })
+      .eq("id", userId);
+
+    if (updateErr) {
+      throw new Error("خطا در ثبت اشتراک یک‌ساله در پروفایل.");
+    }
+  }
+}
+
+// 0) GET /api/web/products
+apiRouter.get("/web/products", (_req, res) => {
+  return res.json({
+    success: true,
+    products: WEB_PRODUCTS,
+  });
+});
+
+// 1) POST /api/web/payment/request
+apiRouter.post("/web/payment/request", async (req, res) => {
+  try {
+    const rawProduct = req.body?.product;
+    if (!isValidWebProduct(rawProduct)) {
+      return res.status(400).json({
+        success: false,
+        error: "محصول انتخاب‌شده معتبر نیست.",
+      });
+    }
+
+    const product: WebProductKey = rawProduct;
+    const productConfig = WEB_PRODUCTS[product];
+
+    const rawDeviceId = req.body?.deviceId ?? req.headers["x-device-id"];
+    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || null;
+
+    if (deviceId && !DEVICE_ID_REGEX.test(deviceId)) {
+      return res.status(400).json({
+        success: false,
+        error: "فرمت شناسه دستگاه (deviceId) معتبر نیست.",
+      });
+    }
+
+    const bearerToken =
+      extractBearerToken(req) ||
+      (typeof req.body?.accessToken === "string" ? req.body.accessToken.trim() : "") ||
+      (typeof req.body?.access_token === "string" ? req.body.access_token.trim() : "");
+
+    let verifiedUserId: string | null = null;
+    let verifiedEmail: string | null = null;
+
+    if (bearerToken) {
+      const authClient = getSupabaseAuthClient();
+      if (!authClient) {
+        return res.status(503).json({
+          success: false,
+          error: "سرویس احراز هویت وب پیکربندی نشده است.",
+        });
+      }
+      const { data: userData, error: userErr } = await authClient.auth.getUser(bearerToken);
+      if (!userErr && userData?.user) {
+        verifiedUserId = userData.user.id;
+        verifiedEmail = userData.user.email || null;
+      }
+    }
+
+    // بسته ۱۰ عددی و اشتراک سالیانه نیازمند نشست معتبر کاربر وب هستند
+    if (product === "pack_10" || product === "annual") {
+      if (!verifiedUserId) {
+        return res.status(401).json({
+          success: false,
+          error: "برای خرید این بسته یا اشتراک ابتدا باید وارد حساب کاربری وب خود شوید.",
+        });
+      }
+    } else {
+      // single برای مهمان مجاز است اما deviceId الزامی است
+      if (!deviceId) {
+        return res.status(400).json({
+          success: false,
+          error: "شناسه دستگاه (deviceId) برای خرید تحلیل تکی الزامی است.",
+        });
+      }
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({
+        success: false,
+        error: "اتصال به دیتابیس پرداخت برقرار نیست.",
+      });
+    }
+
+    const merchantId = getConfiguredZarinpalMerchantId();
+    if (!merchantId) {
+      return res.status(503).json({
+        success: false,
+        error: "درگاه پرداخت زرین‌پال پیکربندی نشده است (ZARINPAL_MERCHANT_ID).",
+      });
+    }
+
+    // الف) ثبت ردیف pending در جدول payments با مبلغ خوانده‌شده از WEB_PRODUCTS
+    const { data: pendingOrder, error: insertErr } = await serviceClient
+      .from("payments")
+      .insert({
+        user_id: verifiedUserId,
+        device_id: deviceId,
+        product,
+        amount_rials: productConfig.amountRials,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+
+    if (insertErr || !pendingOrder) {
+      console.error("[Web Payment Request] DB insert failed:", insertErr);
+      return res.status(500).json({
+        success: false,
+        error: "خطا در ثبت اولیه سفارش پرداخت.",
+      });
+    }
+
+    const callbackUrl = `${getWebRedirectBaseUrl(req)}/api/web/payment/verify`;
+
+    // ب) فراخوانی درگاه زرین‌پال (بدون هیچ مسیر mock/fallback)
+    let zarinpalData: any = null;
+    try {
+      const zarinpalRes = await fetch("https://api.zarinpal.com/pg/v4/payment/request.json", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          merchant_id: merchantId,
+          amount: productConfig.amountRials,
+          callback_url: callbackUrl,
+          description: productConfig.label,
+          metadata: {
+            order_id: pendingOrder.id,
+            ...(verifiedEmail ? { email: verifiedEmail } : {}),
+          },
+        }),
+      });
+      zarinpalData = await zarinpalRes.json().catch(() => null);
+    } catch (gatewayErr) {
+      console.error("[Web Payment Request] Zarinpal fetch error:", gatewayErr);
+      await serviceClient
+        .from("payments")
+        .update({ status: "failed" })
+        .eq("id", pendingOrder.id)
+        .eq("status", "pending");
+
+      return res.status(502).json({
+        success: false,
+        error: "خطا در برقراری ارتباط با درگاه پرداخت زرین‌پال. لطفاً دوباره تلاش کنید.",
+      });
+    }
+
+    const code = zarinpalData?.data?.code;
+    const authority = zarinpalData?.data?.authority ? String(zarinpalData.data.authority) : null;
+
+    if (code !== 100 || !authority) {
+      console.error("[Web Payment Request] Zarinpal rejected:", zarinpalData);
+      await serviceClient
+        .from("payments")
+        .update({ status: "failed" })
+        .eq("id", pendingOrder.id)
+        .eq("status", "pending");
+
+      return res.status(502).json({
+        success: false,
+        error:
+          zarinpalData?.errors?.message ||
+          zarinpalData?.data?.message ||
+          "درگاه زرین‌پال درخواست پرداخت را تایید نکرد.",
+      });
+    }
+
+    // ج) ذخیره authority روی همان ردیف سفارش
+    const { error: updateAuthErr } = await serviceClient
+      .from("payments")
+      .update({ authority })
+      .eq("id", pendingOrder.id)
+      .eq("status", "pending");
+
+    if (updateAuthErr) {
+      console.error("[Web Payment Request] Failed to store authority:", updateAuthErr);
+      return res.status(500).json({
+        success: false,
+        error: "خطا در ذخیره‌سازی شناسه تراکنش پرداخت.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      order_id: pendingOrder.id,
+      authority,
+      product,
+      amount_rials: productConfig.amountRials,
+      paymentUrl: `https://www.zarinpal.com/pg/StartPay/${authority}`,
+    });
+  } catch (err: any) {
+    console.error("[Web Payment Request] Unexpected error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای غیرمنتظره در ایجاد درخواست پرداخت.",
+    });
+  }
+});
+
+// 2) GET /api/web/payment/verify
+apiRouter.get("/web/payment/verify", async (req, res) => {
+  try {
+    // سفارش فقط از روی Authority پیدا می‌شود؛ هیچ پارامتر دیگری از کوئری اعتماد نمی‌شود
+    const rawAuthority = req.query?.Authority;
+    const rawStatus = req.query?.Status;
+    const authority = (Array.isArray(rawAuthority) ? rawAuthority[0] : rawAuthority)?.toString().trim() || "";
+    const statusParam = (Array.isArray(rawStatus) ? rawStatus[0] : rawStatus)?.toString().trim() || "";
+
+    if (!authority || !AUTHORITY_REGEX.test(authority)) {
+      return res.redirect("/?payment=failed");
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.redirect("/?payment=failed");
+    }
+
+    const { data: order, error: findErr } = await serviceClient
+      .from("payments")
+      .select("*")
+      .eq("authority", authority)
+      .maybeSingle();
+
+    if (findErr || !order) {
+      console.warn("[Web Payment Verify] Unknown authority callback:", authority);
+      return res.redirect("/?payment=failed");
+    }
+
+    // اگر سفارش قبلاً paid شده است، بدون تغییر مجدد نتیجه موفق را برگردان
+    if (order.status === "paid") {
+      return res.redirect(`/?payment=success&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    // اگر کاربر پرداخت را لغو کرده یا Status برابر OK نیست
+    if (statusParam !== "OK") {
+      await serviceClient
+        .from("payments")
+        .update({ status: "failed" })
+        .eq("id", order.id)
+        .eq("status", "pending");
+
+      return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    if (order.status === "failed") {
+      return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    const merchantId = getConfiguredZarinpalMerchantId();
+    if (!merchantId) {
+      await serviceClient
+        .from("payments")
+        .update({ status: "failed" })
+        .eq("id", order.id)
+        .eq("status", "pending");
+      return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    // فراخوانی verify.json با دقیقاً همان amount_rials ذخیره‌شده در سفارش
+    let verifyData: any = null;
+    try {
+      const verifyRes = await fetch("https://api.zarinpal.com/pg/v4/payment/verify.json", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          merchant_id: merchantId,
+          amount: Number(order.amount_rials),
+          authority,
+        }),
+      });
+      verifyData = await verifyRes.json().catch(() => null);
+    } catch (gatewayErr) {
+      console.error("[Web Payment Verify] Zarinpal verify fetch error:", gatewayErr);
+      return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    const code = verifyData?.data?.code;
+    const refId = verifyData?.data?.ref_id != null ? String(verifyData.data.ref_id) : order.ref_id || null;
+
+    if (code === 100) {
+      // تغییر وضعیت اتمیک از pending به paid تا در صورت همزمانی فقط یک درخواست اعطا انجام دهد
+      const { data: claimedOrder, error: claimErr } = await serviceClient
+        .from("payments")
+        .update({
+          status: "paid",
+          ref_id: refId,
+          paid_at: new Date().toISOString(),
+        })
+        .eq("id", order.id)
+        .eq("status", "pending")
+        .select("*")
+        .maybeSingle();
+
+      if (claimErr) {
+        console.error("[Web Payment Verify] Failed claiming pending order:", claimErr);
+        return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+      }
+
+      if (claimedOrder) {
+        await grantWebPaymentEntitlement(serviceClient, claimedOrder);
+      }
+
+      return res.redirect(`/?payment=success&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    if (code === 101) {
+      // کد 101: قبلاً در زرین‌پال تایید شده است -> فقط همگام‌سازی وضعیت/ref_id بدون اعطای مجدد
+      await serviceClient
+        .from("payments")
+        .update({
+          status: "paid",
+          ...(refId ? { ref_id: refId } : {}),
+          paid_at: order.paid_at || new Date().toISOString(),
+        })
+        .eq("id", order.id)
+        .eq("status", "pending");
+
+      return res.redirect(`/?payment=success&order_id=${encodeURIComponent(order.id)}`);
+    }
+
+    // سایر کدها = ناموفق
+    await serviceClient
+      .from("payments")
+      .update({ status: "failed" })
+      .eq("id", order.id)
+      .eq("status", "pending");
+
+    return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+  } catch (err: any) {
+    console.error("[Web Payment Verify] Unexpected error:", err);
+    return res.redirect("/?payment=failed");
+  }
+});
+
+// 3) GET /api/web/payment/status
+apiRouter.get("/web/payment/status", async (req, res) => {
+  try {
+    const rawOrderId = req.query?.order_id;
+    const orderId = (Array.isArray(rawOrderId) ? rawOrderId[0] : rawOrderId)?.toString().trim() || "";
+
+    if (!orderId || !UUID_REGEX.test(orderId)) {
+      return res.status(400).json({
+        success: false,
+        error: "شناسه سفارش (order_id) معتبر نیست.",
+      });
+    }
+
+    const rawDeviceId = req.query?.deviceId ?? req.headers["x-device-id"];
+    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
+    if (deviceId && !DEVICE_ID_REGEX.test(deviceId)) {
+      return res.status(400).json({
+        success: false,
+        error: "شناسه دستگاه (deviceId) معتبر نیست.",
+      });
+    }
+    const bearerToken = extractBearerToken(req);
+
+    if (!deviceId && !bearerToken) {
+      return res.status(401).json({
+        success: false,
+        error: "برای استعلام وضعیت سفارش، ارسال توکن حساب کاربری یا شناسه دستگاه الزامی است.",
+      });
+    }
+
+    let callerUserId: string | null = null;
+    if (bearerToken) {
+      const authClient = getSupabaseAuthClient();
+      if (authClient) {
+        const { data: userData } = await authClient.auth.getUser(bearerToken);
+        if (userData?.user) {
+          callerUserId = userData.user.id;
+        }
+      }
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس استعلام پرداخت در دسترس نیست.",
+      });
+    }
+
+    const { data: payment, error: selectErr } = await serviceClient
+      .from("payments")
+      .select("id, user_id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (selectErr || !payment) {
+      return res.status(404).json({
+        success: false,
+        error: "سفارش مورد نظر یافت نشد.",
+      });
+    }
+
+    const userMatches = Boolean(payment.user_id && callerUserId && payment.user_id === callerUserId);
+    const deviceMatches = Boolean(payment.device_id && deviceId && payment.device_id === deviceId);
+
+    if (!userMatches && !deviceMatches) {
+      return res.status(403).json({
+        success: false,
+        error: "شما مجاز به مشاهده وضعیت این سفارش نیستید.",
+      });
+    }
+
+    const canRevealSingleEntitlement =
+      payment.product === "single" &&
+      payment.status === "paid" &&
+      deviceMatches;
+
+    return res.json({
+      success: true,
+      order_id: payment.id,
+      product: payment.product,
+      status: payment.status,
+      amount_rials: payment.amount_rials,
+      ref_id: payment.ref_id || null,
+      paid_at: payment.paid_at || null,
+      entitlement_token: canRevealSingleEntitlement ? payment.entitlement_token : null,
+      entitlement_used: Boolean(payment.entitlement_used),
+    });
+  } catch (err: any) {
+    console.error("[Web Payment Status] Unexpected error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در دریافت وضعیت پرداخت.",
+    });
+  }
+});
+
+// ==========================================
+// Web Paid-Only Analyze Route (POST /api/web/analyze)
+// ==========================================
+
+apiRouter.post("/web/analyze", async (req, res) => {
+  try {
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({
+        success: false,
+        error: "اتصال به سرویس دیتابیس برقرار نیست.",
+      });
+    }
+
+    const rawDeviceId = req.headers["x-device-id"] ?? req.body?.deviceId;
+    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
+
+    const rawEntitlement = req.headers["x-entitlement-token"];
+    const entitlementToken = (Array.isArray(rawEntitlement) ? rawEntitlement[0] : rawEntitlement)?.toString().trim() || "";
+
+    const bearerToken = extractBearerToken(req);
+
+    let verifiedUserId: string | null = null;
+    let userProfile: any = null;
+    let isAnnualActive = false;
+    let annualDailyLimitHit = false;
+    let usedToday = 0;
+
+    // الف و ب) بررسی سشن معتبر کاربر وب
+    if (bearerToken) {
+      const authClient = getSupabaseAuthClient();
+      if (authClient) {
+        const { data: userData, error: userErr } = await authClient.auth.getUser(bearerToken);
+        if (!userErr && userData?.user) {
+          verifiedUserId = userData.user.id;
+          const { data: existingProf } = await serviceClient
+            .from("profiles")
+            .select("*")
+            .eq("id", verifiedUserId)
+            .maybeSingle();
+
+          if (existingProf) {
+            userProfile = existingProf;
+          } else {
+            const { data: createdProf } = await serviceClient
+              .from("profiles")
+              .upsert({ id: verifiedUserId, email: userData.user.email || null }, { onConflict: "id" })
+              .select("*")
+              .maybeSingle();
+            userProfile = createdProf;
+          }
+        }
+      }
+    }
+
+    type WebAccessMode =
+      | { kind: "annual"; userId: string; today: string; usedToday: number }
+      | { kind: "credits"; userId: string }
+      | { kind: "entitlement"; paymentId: string; deviceId: string };
+
+    let accessMode: WebAccessMode | null = null;
+    const today = getTodayDateString();
+    const dailyLimit = WEB_PRODUCTS.annual.dailyLimit;
+
+    if (verifiedUserId && userProfile) {
+      // الف) اشتراک یک‌ساله فعال با سقف روزانه
+      isAnnualActive = Boolean(
+        userProfile.annual_expires_at && new Date(userProfile.annual_expires_at) > new Date()
+      );
+      if (isAnnualActive) {
+        usedToday =
+          userProfile.last_analysis_date === today
+            ? Number(userProfile.daily_analyses_count || 0)
+            : 0;
+        if (usedToday < dailyLimit) {
+          accessMode = { kind: "annual", userId: verifiedUserId, today, usedToday };
+        } else {
+          annualDailyLimitHit = true;
+        }
+      }
+
+      // ب) اعتبار پروفایل (credits > 0)
+      if (!accessMode && Number(userProfile.credits || 0) > 0) {
+        accessMode = { kind: "credits", userId: verifiedUserId };
+      }
+    }
+
+    // ج) توکن تحلیل تکی یک‌بارمصرف متعلق به همین deviceId
+    if (
+      !accessMode &&
+      entitlementToken &&
+      UUID_REGEX.test(entitlementToken) &&
+      deviceId &&
+      DEVICE_ID_REGEX.test(deviceId)
+    ) {
+      const { data: paidRow, error: entErr } = await serviceClient
+        .from("payments")
+        .select("id, device_id, product, status, entitlement_used")
+        .eq("entitlement_token", entitlementToken)
+        .eq("product", "single")
+        .eq("status", "paid")
+        .eq("entitlement_used", false)
+        .eq("device_id", deviceId)
+        .maybeSingle();
+
+      if (!entErr && paidRow) {
+        accessMode = { kind: "entitlement", paymentId: paidRow.id, deviceId };
+      }
+    }
+
+    if (!accessMode) {
+      if (annualDailyLimitHit) {
+        return res.status(403).json({
+          success: false,
+          error: "DAILY_LIMIT_REACHED",
+          message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد یا می‌توانید بسته اعتبار تهیه فرمایید.`,
+          daily_used: usedToday,
+          daily_limit: dailyLimit,
+          daily_remaining: 0,
+        });
+      }
+
+      return res.status(402).json({
+        success: false,
+        error: "PAYMENT_REQUIRED",
+        message: "برای تحلیل ابلاغیه در نسخه وب، لطفاً تحلیل تکی خریداری کنید یا وارد حساب کاربری دارای اعتبار شوید.",
+      });
+    }
+
+    // اعتبارسنجی ورودی تحلیل پیش از فراخوانی Gemini (بدون کسر سهمیه)
+    const { fileBase64, mimeType, rawText } = req.body || {};
+    if (fileBase64 != null && typeof fileBase64 !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_INPUT",
+        message: "فرمت فایل ارسالی نامعتبر است.",
+      });
+    }
+    if (rawText != null && (typeof rawText !== "string" || rawText.length > 200000)) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_INPUT",
+        message: "متن ارسالی نامعتبر یا بیش از حد مجاز طولانی است.",
+      });
+    }
+    if (fileBase64) {
+      const normalizedMime = typeof mimeType === "string" ? mimeType.trim().toLowerCase() : "";
+      if (!ALLOWED_WEB_MIME_TYPES.has(normalizedMime)) {
+        return res.status(400).json({
+          success: false,
+          error: "INVALID_MIME_TYPE",
+          message: "فقط فایل‌های PDF و تصاویر JPG، PNG و WEBP پشتیبانی می‌شوند.",
+        });
+      }
+    }
+
+    // اجرای تحلیل با تابع مشترک runAnalysis (بدون مصرف سهمیه پیش از پاسخ موفق)
+    const analysisResult = await runAnalysis({ fileBase64, mimeType, rawText });
+    if (!analysisResult.ok) {
+      // در خطاهای Gemini یا سند نامربوط هیچ اعتباری/سهمیه‌ای کم نمی‌شود
+      return res.status(analysisResult.status || 500).json(analysisResult.body || { success: false });
+    }
+
+    // مصرف اتمیک فقط پس از پاسخ موفق Gemini و معتبر بودن سند
+    if (accessMode.kind === "annual") {
+      let annualConsumed = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: freshProf } = await serviceClient
+          .from("profiles")
+          .select("daily_analyses_count, last_analysis_date")
+          .eq("id", accessMode.userId)
+          .maybeSingle();
+
+        const currentCount =
+          freshProf?.last_analysis_date === accessMode.today
+            ? Number(freshProf?.daily_analyses_count || 0)
+            : 0;
+
+        if (currentCount >= dailyLimit) {
+          return res.status(403).json({
+            success: false,
+            error: "DAILY_LIMIT_REACHED",
+            message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است.`,
+            daily_used: currentCount,
+            daily_limit: dailyLimit,
+            daily_remaining: 0,
+          });
+        }
+
+        let query = serviceClient
+          .from("profiles")
+          .update({
+            daily_analyses_count: currentCount + 1,
+            last_analysis_date: accessMode.today,
+          })
+          .eq("id", accessMode.userId);
+
+        if (freshProf?.last_analysis_date === accessMode.today) {
+          query = query.eq("daily_analyses_count", currentCount);
+        } else if (freshProf?.last_analysis_date) {
+          query = query.eq("last_analysis_date", freshProf.last_analysis_date);
+        } else {
+          query = query.is("last_analysis_date", null);
+        }
+
+        const { data: updatedProf } = await query.select("id").maybeSingle();
+        if (updatedProf) {
+          annualConsumed = true;
+          break;
+        }
+      }
+
+      if (!annualConsumed) {
+        return res.status(403).json({
+          success: false,
+          error: "DAILY_LIMIT_REACHED",
+          message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است.`,
+        });
+      }
+    } else if (accessMode.kind === "credits") {
+      let creditConsumed = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: freshProf } = await serviceClient
+          .from("profiles")
+          .select("credits")
+          .eq("id", accessMode.userId)
+          .maybeSingle();
+
+        const curCredits = Number(freshProf?.credits ?? 0);
+        if (curCredits <= 0) {
+          break;
+        }
+
+        const { data: updatedProf } = await serviceClient
+          .from("profiles")
+          .update({ credits: curCredits - 1 })
+          .eq("id", accessMode.userId)
+          .eq("credits", curCredits)
+          .select("credits")
+          .maybeSingle();
+
+        if (updatedProf) {
+          creditConsumed = true;
+          break;
+        }
+      }
+
+      if (!creditConsumed) {
+        return res.status(402).json({
+          success: false,
+          error: "PAYMENT_REQUIRED",
+          message: "اعتبار حساب کاربری شما برای این تحلیل کافی نیست.",
+        });
+      }
+    } else if (accessMode.kind === "entitlement") {
+      const { data: claimedPayment } = await serviceClient
+        .from("payments")
+        .update({ entitlement_used: true })
+        .eq("id", accessMode.paymentId)
+        .eq("entitlement_used", false)
+        .eq("status", "paid")
+        .eq("device_id", accessMode.deviceId)
+        .select("id")
+        .maybeSingle();
+
+      if (!claimedPayment) {
+        return res.status(402).json({
+          success: false,
+          error: "PAYMENT_REQUIRED",
+          message: "توکن تحلیل تکی قبلاً مصرف شده یا معتبر نیست.",
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: analysisResult.data,
+      accessMode: accessMode.kind,
+    });
+  } catch (error: any) {
+    console.error("[Web Analyze Error]:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+    });
   }
 });
 

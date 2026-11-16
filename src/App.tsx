@@ -11,13 +11,33 @@ import { HistoryDrawer } from "./components/HistoryDrawer";
 import { PrivacyNoticeModal } from "./components/PrivacyNoticeModal";
 import { DefenseDraftModal } from "./components/DefenseDraftModal";
 import { CoinPurchaseModal } from "./components/CoinPurchaseModal";
+import { WebPaywallModal } from "./components/WebPaywallModal";
+import { AuthModal } from "./components/AuthModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
 } from "./types";
 import { SampleNotice } from "./sampleData";
 import { getApiUrl } from "./utils/apiHelper";
-import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X } from "lucide-react";
+import {
+  WebUserProfile,
+  WebProductKey,
+  WebPaymentReceipt,
+  webFetchMe,
+  webLogout,
+  webRefreshSession,
+  getStoredWebSession,
+  getStoredEntitlementToken,
+  saveEntitlementToken,
+  clearEntitlementToken,
+  getStoredWebPaymentReceipt,
+  saveWebPaymentReceipt,
+  clearWebPaymentReceipt,
+  consumeWebAuthRedirectParams,
+  consumeWebPaymentRedirectParams,
+  fetchWebPaymentStatus,
+} from "./services/webAuth";
+import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X, CheckCircle2, ReceiptText } from "lucide-react";
 
 const HISTORY_STORAGE_KEY = "judicial_notice_analysis_history";
 const DEVICE_ID_KEY = "eblaghyar_device_id";
@@ -37,6 +57,88 @@ export default function App() {
   const [dailyRemaining, setDailyRemaining] = useState<number>(3);
   const [dailyUsed, setDailyUsed] = useState<number>(0);
   const [isCoinModalOpen, setIsCoinModalOpen] = useState<boolean>(false);
+  const [isWebPaywallOpen, setIsWebPaywallOpen] = useState<boolean>(false);
+  const [webUser, setWebUser] = useState<WebUserProfile | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [webAuthNotice, setWebAuthNotice] = useState<string | null>(null);
+  const [pendingPaymentOrderId, setPendingPaymentOrderId] = useState<string | null>(null);
+  const [hasSingleEntitlement, setHasSingleEntitlement] = useState<boolean>(
+    () => !Capacitor.isNativePlatform() && Boolean(getStoredEntitlementToken())
+  );
+  const [webPaymentReceipt, setWebPaymentReceipt] = useState<WebPaymentReceipt | null>(
+    () => (!Capacitor.isNativePlatform() ? getStoredWebPaymentReceipt() : null)
+  );
+  const [webPaymentFailed, setWebPaymentFailed] = useState<boolean>(false);
+  const [pendingWebProduct, setPendingWebProduct] = useState<WebProductKey | null>(null);
+  const [autoTriggerWebProduct, setAutoTriggerWebProduct] = useState<WebProductKey | null>(null);
+
+  const refreshWebUser = async () => {
+    if (Capacitor.isNativePlatform()) return;
+    const profile = await webFetchMe();
+    setWebUser(profile);
+  };
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
+    const { authNotice } = consumeWebAuthRedirectParams();
+    if (authNotice) {
+      setWebAuthNotice(authNotice);
+    }
+    const { paymentStatus, orderId } = consumeWebPaymentRedirectParams();
+    if (paymentStatus === "failed") {
+      setWebPaymentFailed(true);
+    } else if (paymentStatus === "success" && orderId) {
+      setPendingPaymentOrderId(orderId);
+    }
+    webFetchMe().then((profile) => {
+      if (profile) {
+        setWebUser(profile);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform() || !pendingPaymentOrderId || !deviceId) return;
+    let cancelled = false;
+    fetchWebPaymentStatus(pendingPaymentOrderId, deviceId).then(async (statusRes) => {
+      if (cancelled) return;
+      setPendingPaymentOrderId(null);
+      if (!statusRes) return;
+      if (statusRes.status === "failed") {
+        setWebPaymentFailed(true);
+        return;
+      }
+      if (statusRes.status !== "paid") return;
+
+      const receipt: WebPaymentReceipt = {
+        order_id: statusRes.order_id,
+        product: statusRes.product,
+        ref_id: statusRes.ref_id || null,
+        paid_at: statusRes.paid_at || null,
+      };
+      saveWebPaymentReceipt(receipt);
+      setWebPaymentReceipt(receipt);
+      setWebPaymentFailed(false);
+      setShowPremiumPrompt(false);
+      setIsWebPaywallOpen(false);
+
+      if (statusRes.product === "single" && statusRes.entitlement_token && !statusRes.entitlement_used) {
+        saveEntitlementToken(statusRes.entitlement_token);
+        setHasSingleEntitlement(true);
+        setCurrentAnalysis(null);
+      } else if (statusRes.product === "pack_10" || statusRes.product === "annual") {
+        await refreshWebUser();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingPaymentOrderId, deviceId]);
+
+  const handleWebLogout = async () => {
+    await webLogout();
+    setWebUser(null);
+  };
 
   const fetchDeviceStatus = async (devId: string, fp?: string) => {
     try {
@@ -72,7 +174,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (deviceId) {
+    if (Capacitor.isNativePlatform() && deviceId) {
       fetchDeviceStatus(deviceId, deviceFingerprint);
     }
   }, [deviceId]);
@@ -123,7 +225,9 @@ export default function App() {
         }
 
         setDeviceId(storedDeviceId);
-        fetchDeviceStatus(storedDeviceId, fingerprint);
+        if (Capacitor.isNativePlatform()) {
+          fetchDeviceStatus(storedDeviceId, fingerprint);
+        }
       } catch (e) {
         console.error("Failed to initialize device ID/Preferences:", e);
         const generated = uuidv4();
@@ -240,7 +344,83 @@ export default function App() {
         setDeviceId(currentDeviceId);
       }
 
-      // ارسال درخواست به همراه هدر x-device-id و x-device-fingerprint
+      if (!Capacitor.isNativePlatform()) {
+        // مسیر تحلیل نسخه وب (فقط با پرداخت / اعتبار / اشتراک)
+        const sendWebAnalyze = (accessToken?: string | null, entitlementTok?: string | null) => {
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+            "x-device-id": currentDeviceId,
+          };
+          if (deviceFingerprint) {
+            headers["x-device-fingerprint"] = deviceFingerprint;
+          }
+          if (accessToken) {
+            headers["Authorization"] = `Bearer ${accessToken}`;
+          }
+          if (entitlementTok) {
+            headers["x-entitlement-token"] = entitlementTok;
+          }
+          return fetch(getApiUrl("/api/web/analyze"), {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ fileBase64, mimeType, rawText }),
+          });
+        };
+
+        const session = getStoredWebSession();
+        const entitlementToken = getStoredEntitlementToken();
+        let res = await sendWebAnalyze(session?.access_token, entitlementToken);
+
+        if (res.status === 402 && session?.refresh_token) {
+          const refreshed = await webRefreshSession(session.refresh_token);
+          if (refreshed?.session?.access_token) {
+            res = await sendWebAnalyze(refreshed.session.access_token, entitlementToken);
+          }
+        }
+
+        const json = await res.json().catch(() => null);
+
+        if (res.status === 402) {
+          if (entitlementToken) {
+            clearEntitlementToken();
+            setHasSingleEntitlement(false);
+          }
+          setShowPremiumPrompt(true);
+          setIsWebPaywallOpen(true);
+          setError(null);
+          return;
+        }
+
+        if (res.status === 403 && json?.error === "DAILY_LIMIT_REACHED") {
+          setError(
+            json?.message ||
+              "سقف روزانه اشتراک یک‌ساله شما تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد."
+          );
+          setShowPremiumPrompt(false);
+          await refreshWebUser();
+          return;
+        }
+
+        if (!res.ok || !json?.success || !json?.data) {
+          throw new Error(json?.message || json?.error || `خطا در تحلیل ابلاغیه قضایی (${res.status})`);
+        }
+
+        if (json.accessMode === "entitlement") {
+          clearEntitlementToken();
+          setHasSingleEntitlement(false);
+        }
+
+        const analysisData: JudicialNoticeAnalysis = json.data;
+        setCurrentAnalysis(analysisData);
+        saveToHistory(analysisData, fileName);
+        setLastAnalyzePayload(null);
+        await refreshWebUser();
+
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+
+      // ارسال درخواست به همراه هدر x-device-id و x-device-fingerprint (نسخه اندروید)
       const res = await fetch(getApiUrl("/api/analyze"), {
         method: "POST",
         headers: {
@@ -299,7 +479,11 @@ export default function App() {
   };
 
   const handleBuyPremium = () => {
-    setIsCoinModalOpen(true);
+    if (!Capacitor.isNativePlatform()) {
+      setIsWebPaywallOpen(true);
+    } else {
+      setIsCoinModalOpen(true);
+    }
   };
 
   const handleSelectSample = (sample: SampleNotice) => {
@@ -365,10 +549,155 @@ export default function App() {
         isPremium={isPremium}
         dailyRemaining={dailyRemaining}
         onOpenCoinModal={() => setIsCoinModalOpen(true)}
+        hasSingleEntitlement={!Capacitor.isNativePlatform() ? hasSingleEntitlement : false}
+        onOpenWebPaywall={!Capacitor.isNativePlatform() ? () => setIsWebPaywallOpen(true) : undefined}
+        webUser={!Capacitor.isNativePlatform() ? webUser : null}
+        onOpenAuthModal={!Capacitor.isNativePlatform() ? () => setIsAuthModalOpen(true) : undefined}
+        onWebLogout={!Capacitor.isNativePlatform() ? handleWebLogout : undefined}
+        onRefreshWebUser={!Capacitor.isNativePlatform() ? refreshWebUser : undefined}
       />
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        {/* اعلان وضعیت تأیید ایمیل / بازیابی رمز در نسخه وب */}
+        {!Capacitor.isNativePlatform() && webAuthNotice && (
+          <div className="max-w-4xl mx-auto mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs sm:text-sm font-bold flex items-center justify-between gap-3 shadow-xs animate-in fade-in">
+            <div className="flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              <span>{webAuthNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setWebAuthNotice(null)}
+              className="p-1.5 rounded-xl text-emerald-700 hover:bg-emerald-100 transition-colors cursor-pointer"
+              aria-label="بستن اعلان"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* بنر آماده بودن ۱ تحلیل تکی پرداخت‌شده در نسخه وب (پایدار پس از رفرش صفحه) */}
+        {!Capacitor.isNativePlatform() && hasSingleEntitlement && !currentAnalysis && (
+          <div
+            id="web-single-entitlement-banner"
+            className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-950 shadow-xs animate-in fade-in"
+          >
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="space-y-1.5 flex-1">
+                <p className="text-sm sm:text-base font-black text-emerald-900">
+                  ۱ تحلیل آماده است؛ ابلاغیه را بارگذاری کنید
+                </p>
+                <p className="text-xs text-emerald-800 leading-relaxed">
+                  فایل تصویر یا PDF ابلاغیه ثنا را در کادر زیر انتخاب کنید و دکمه «شروع تحلیل هوشمند ابلاغیه» را بزنید.
+                </p>
+                {webPaymentReceipt?.product === "single" && webPaymentReceipt.ref_id && (
+                  <div className="pt-2 mt-2 border-t border-emerald-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-900">
+                      <ReceiptText className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>کد پیگیری پرداخت (Ref ID):</span>
+                      <span dir="ltr" className="font-mono font-black tabular-nums bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                        {webPaymentReceipt.ref_id}
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-emerald-800">
+                      برای پشتیبانی و بازیابی خرید نگه دارید
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* بنر رسید پرداخت موفق بسته ۱۰ ابلاغی یا اشتراک سالیانه (یا نمایش Ref ID) */}
+        {!Capacitor.isNativePlatform() &&
+          webPaymentReceipt &&
+          (!hasSingleEntitlement || webPaymentReceipt.product !== "single") && (
+            <div
+              id="web-payment-receipt-banner"
+              className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-950 shadow-xs animate-in fade-in"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-black text-emerald-900">
+                      {webPaymentReceipt.product === "pack_10"
+                        ? "پرداخت بسته ۱۰ ابلاغی با موفقیت انجام شد و اعتبار به حساب شما اضافه گردید."
+                        : webPaymentReceipt.product === "annual"
+                        ? "پرداخت اشتراک سالیانه (روزی ۳ ابلاغ) با موفقیت انجام و برای حساب شما فعال شد."
+                        : "پرداخت تحلیل تکی با موفقیت ثبت شد."}
+                    </p>
+                    {webPaymentReceipt.ref_id && (
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-900">
+                        <ReceiptText className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span className="font-bold">کد پیگیری (Ref ID):</span>
+                        <span dir="ltr" className="font-mono font-black tabular-nums bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                          {webPaymentReceipt.ref_id}
+                        </span>
+                        <span className="text-[11px] font-semibold text-emerald-800">
+                          — برای پشتیبانی و بازیابی خرید نگه دارید
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearWebPaymentReceipt();
+                    setWebPaymentReceipt(null);
+                  }}
+                  className="p-1.5 rounded-xl text-emerald-700 hover:bg-emerald-100 transition-colors cursor-pointer shrink-0"
+                  aria-label="بستن رسید پرداخت"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+        {/* بنر خطای پرداخت وب (?payment=failed) + تلاش مجدد */}
+        {!Capacitor.isNativePlatform() && webPaymentFailed && (
+          <div
+            id="web-payment-failed-banner"
+            className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in"
+          >
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-[#8B4513] shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">پرداخت در درگاه بانکی ناموفق بود یا لغو شد</p>
+                <p className="text-xs sm:text-sm mt-0.5 text-[#6B3410]">
+                  هیچ خریدی نهایی نشده است. در صورت کسر وجه از حساب بانکی، مبلغ طی ۷۲ ساعت به حساب شما بازمی‌گردد. می‌توانید مجدداً اقدام کنید.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setWebPaymentFailed(false);
+                  setIsWebPaywallOpen(true);
+                }}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 bg-[#8B4513] hover:bg-[#72380F] text-white rounded-xl font-bold text-xs transition-colors cursor-pointer shadow-xs"
+              >
+                <RefreshCcw className="w-3.5 h-3.5" />
+                <span>تلاش مجدد</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setWebPaymentFailed(false)}
+                className="p-2 rounded-xl text-[#8B4513] hover:bg-[#F2DFD8] transition-colors cursor-pointer"
+                aria-label="بستن خطای پرداخت"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* پیام خطای پردازش هوش مصنوعی */}
         {error && (
           <div className="max-w-4xl mx-auto mb-6 p-4 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
@@ -392,8 +721,8 @@ export default function App() {
           </div>
         )}
 
-        {/* هشدار ملایم اتمام رو به پایان توکن‌ها (وقتی کاربر حداقل یک تحلیل انجام داده و ۱ سکه مانده باشد) */}
-        {!isPremium && freeTokens > 0 && freeTokens < 2 && history.length > 0 && !dismissedLowTokenWarning && !showPremiumPrompt && (
+        {/* هشدار ملایم اتمام رو به پایان توکن‌ها (فقط نسخه اندروید) */}
+        {Capacitor.isNativePlatform() && !isPremium && freeTokens > 0 && freeTokens < 2 && history.length > 0 && !dismissedLowTokenWarning && !showPremiumPrompt && (
           <div
             id="banner-low-tokens"
             className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-gradient-to-r from-amber-50/90 to-yellow-50/90 border border-amber-200 rounded-2xl shadow-xs text-right animate-in fade-in flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
@@ -435,7 +764,7 @@ export default function App() {
           </div>
         )}
 
-        {/* کارت اعلان پایان توکن‌های رایگان (در بالای صفحه بارگذاری) */}
+        {/* کارت اعلان نیاز به پرداخت یا اتمام توکن‌ها */}
         {showPremiumPrompt && (
           <div
             id="banner-limit-reached"
@@ -449,26 +778,39 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <h3 className="text-base sm:text-lg font-bold text-[#4A4844]">
-                      پایان سقف تحلیل‌های رایگان (۲ ابلاغیه)
+                      {!Capacitor.isNativePlatform()
+                        ? "نیاز به تهیه اعتبار یا اشتراک برای تحلیل"
+                        : "پایان سقف تحلیل‌های رایگان (۲ ابلاغیه)"}
                     </h3>
                     <span className="px-2 py-0.5 rounded-md bg-[#8F7732]/10 text-[#8F7732] text-[11px] font-bold">
-                      دستگاه جاری
+                      {!Capacitor.isNativePlatform() ? "نسخه وب" : "دستگاه جاری"}
                     </span>
                   </div>
                   <p className="text-xs sm:text-sm text-[#6E5D2A] leading-relaxed max-w-2xl">
-                    شما از ۲ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها و تنظیم پیش‌نویس لوایح دفاعیه، نسخه پرمیوم را فعال فرمایید.
+                    {!Capacitor.isNativePlatform()
+                      ? "تحلیل ابلاغیه در نسخه وب نیازمند پرداخت است. می‌توانید تحلیل تکی خریداری کنید یا وارد حساب کاربری دارای اعتبار / اشتراک یک‌ساله خود شوید."
+                      : "شما از ۲ فرصت تحلیل رایگان ابلاغیه در این دستگاه استفاده نموده‌اید. برای تحلیل نامحدود ابلاغیه‌ها و تنظیم پیش‌نویس لوایح دفاعیه، نسخه پرمیوم را فعال فرمایید."}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2.5 w-full sm:w-auto pt-2 sm:pt-0">
+                {!Capacitor.isNativePlatform() && !webUser && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAuthModalOpen(true)}
+                    className="flex-1 sm:flex-none px-4 py-3 rounded-xl bg-white border border-[#D8CBA6] hover:bg-[#FAF6EC] text-[#4A4844] font-bold text-xs sm:text-sm transition-all cursor-pointer shrink-0"
+                  >
+                    ورود به حساب
+                  </button>
+                )}
                 <button
                   id="btn-buy-premium-banner"
                   onClick={handleBuyPremium}
                   className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#8F7732] hover:bg-[#776326] text-white font-bold text-xs sm:text-sm transition-all shadow-xs cursor-pointer shrink-0"
                 >
                   <Sparkles className="w-4 h-4 text-[#FFF2B2]" />
-                  <span>خرید نسخه پرمیوم</span>
+                  <span>{!Capacitor.isNativePlatform() ? "خرید تحلیل / اشتراک" : "خرید نسخه پرمیوم"}</span>
                 </button>
                 <button
                   onClick={() => setShowPremiumPrompt(false)}
@@ -542,22 +884,45 @@ export default function App() {
         isOpen={isPrivacyOpen}
         onClose={() => setIsPrivacyOpen(false)}
       />
-      {/* Coin Purchase Modal */}
-      <CoinPurchaseModal
-        isOpen={isCoinModalOpen}
-        onClose={() => setIsCoinModalOpen(false)}
-        deviceId={deviceId}
-        isPremium={isPremium}
-        freeTokens={freeTokens}
-        dailyRemaining={dailyRemaining}
-        dailyUsed={dailyUsed}
-        onSuccessUpdate={(tokens, premium) => {
-          setFreeTokens(tokens);
-          setIsPremium(premium);
-          setShowPremiumPrompt(false);
-          if (deviceId) fetchDeviceStatus(deviceId);
-        }}
-      />
+      {/* Coin Purchase Modal (Native Android only) */}
+      {Capacitor.isNativePlatform() && (
+        <CoinPurchaseModal
+          isOpen={isCoinModalOpen}
+          onClose={() => setIsCoinModalOpen(false)}
+          deviceId={deviceId}
+          isPremium={isPremium}
+          freeTokens={freeTokens}
+          dailyRemaining={dailyRemaining}
+          dailyUsed={dailyUsed}
+          onSuccessUpdate={(tokens, premium) => {
+            setFreeTokens(tokens);
+            setIsPremium(premium);
+            setShowPremiumPrompt(false);
+            if (deviceId) fetchDeviceStatus(deviceId);
+          }}
+        />
+      )}
+
+      {/* Web Paywall Modal (Web only) */}
+      {!Capacitor.isNativePlatform() && (
+        <WebPaywallModal
+          isOpen={isWebPaywallOpen}
+          onClose={() => {
+            setIsWebPaywallOpen(false);
+            setAutoTriggerWebProduct(null);
+          }}
+          deviceId={deviceId}
+          webUser={webUser}
+          hasSingleEntitlement={hasSingleEntitlement}
+          onRequireAuth={(product) => {
+            setPendingWebProduct(product);
+            setIsWebPaywallOpen(false);
+            setIsAuthModalOpen(true);
+          }}
+          autoTriggerProduct={autoTriggerWebProduct}
+          onAutoTriggerHandled={() => setAutoTriggerWebProduct(null)}
+        />
+      )}
 
       {/* Defense Draft Modal */}
       {currentAnalysis && (
@@ -565,6 +930,27 @@ export default function App() {
           isOpen={isDefenseDraftOpen}
           onClose={() => setIsDefenseDraftOpen(false)}
           analysis={currentAnalysis}
+        />
+      )}
+
+      {/* Web-only Auth Modal */}
+      {!Capacitor.isNativePlatform() && (
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => {
+            setIsAuthModalOpen(false);
+            setPendingWebProduct(null);
+          }}
+          onAuthSuccess={(user) => {
+            setWebUser(user);
+            setWebAuthNotice(null);
+            if (pendingWebProduct) {
+              const targetProduct = pendingWebProduct;
+              setPendingWebProduct(null);
+              setAutoTriggerWebProduct(targetProduct);
+              setIsWebPaywallOpen(true);
+            }
+          }}
         />
       )}
 
