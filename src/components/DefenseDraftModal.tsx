@@ -26,20 +26,31 @@ import {
   DefenseDraftOptions,
   GeneratedDefenseDraft,
 } from "../utils/defenseDraftGenerator";
+import { Capacitor } from "@capacitor/core";
 import { safeFetchJson } from "../utils/apiHelper";
+import { getWebAiHeaders } from "../services/webAuth";
 
 interface DefenseDraftModalProps {
   isOpen: boolean;
   onClose: () => void;
   analysis: JudicialNoticeAnalysis;
   currentUser?: any;
+  deviceId?: string;
+  isWebSampleLocked?: boolean;
+  isWebAccessLocked?: boolean;
+  onOpenWebPaywall?: () => void;
 }
 
 export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
   isOpen,
   onClose,
   analysis,
+  deviceId,
+  isWebSampleLocked = false,
+  isWebAccessLocked = false,
+  onOpenWebPaywall,
 }) => {
+  const isWebLocked = !Capacitor.isNativePlatform() && (isWebSampleLocked || isWebAccessLocked);
   const [draftType, setDraftType] = useState<DefenseDraftOptions["draftType"]>("defense_denial");
   const [userFullName, setUserFullName] = useState<string>("");
   const [userNationalCode, setUserNationalCode] = useState<string>("");
@@ -84,6 +95,15 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
   };
 
   const handleRegenerateWithAI = async () => {
+    if (isWebLocked) {
+      setAiError(
+        isWebSampleLocked
+          ? "در گزارش نمونه، تولید هوشمند لایحه با AI قفل است. برای تحلیل ابلاغیه واقعی و استفاده از هوش مصنوعی، اعتبار یا اشتراک وب تهیه کنید."
+          : "برای تنظیم پیشرفته لایحه با هوش مصنوعی در نسخه وب، لطفاً ابتدا طرح یا اشتراک فعال تهیه کنید."
+      );
+      return;
+    }
+
     setIsGeneratingAI(true);
     setAiError(null);
     try {
@@ -91,11 +111,16 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
         ? customEvidenceText.split("\n").filter((l) => l.trim().length > 0)
         : undefined;
 
+      const requestHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(!Capacitor.isNativePlatform() ? getWebAiHeaders(deviceId) : {}),
+      };
+
       const data = await safeFetchJson<{ success: boolean; draft?: any; error?: string }>(
         "/api/generate-defense-draft",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: requestHeaders,
           body: JSON.stringify({
             analysis,
             draftType,
@@ -141,6 +166,16 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
       }
     } catch (err: any) {
       console.warn("AI draft generation fallback to local builder:", err);
+      if (!Capacitor.isNativePlatform() && (err?.status === 402 || err?.status === 403)) {
+        setAiError(
+          err?.message ||
+            "برای استفاده از تنظیم هوشمند لایحه با هوش مصنوعی در نسخه وب، تهیه اعتبار یا اشتراک فعال الزامی است."
+        );
+        if (onOpenWebPaywall) {
+          onOpenWebPaywall();
+        }
+        return;
+      }
       setAiError("ارتباط مستقیم با سرور هوش مصنوعی ناموفق بود؛ نسخه الگوی هوشمند محلی اعمال گردید.");
       const localDraft = buildDefenseDraft(analysis, {
         draftType,
@@ -377,18 +412,49 @@ export const DefenseDraftModal: React.FC<DefenseDraftModalProps> = ({
             <button
               type="button"
               id="btn-ai-regenerate-draft"
-              disabled={isGeneratingAI}
+              disabled={isGeneratingAI || isWebLocked}
               onClick={handleRegenerateWithAI}
-              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[#FAF6EC] hover:bg-[#F4EEDC] text-[#8F7732] border border-[#EBE4CF] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
+              className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[#FAF6EC] hover:bg-[#F4EEDC] text-[#8F7732] border border-[#EBE4CF] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isGeneratingAI ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Sparkles className="w-3.5 h-3.5 text-[#8F7732]" />
               )}
-              <span>{isGeneratingAI ? "در حال تنظیم با هوش مصنوعی..." : "تنظیم پیشرفته با هوش مصنوعی"}</span>
+              <span>
+                {isGeneratingAI
+                  ? "در حال تنظیم با هوش مصنوعی..."
+                  : isWebLocked
+                  ? "تنظیم با AI (نیازمند اشتراک/اعتبار)"
+                  : "تنظیم پیشرفته با هوش مصنوعی"}
+              </span>
             </button>
           </div>
+
+          {isWebLocked && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>
+                  {isWebSampleLocked
+                    ? "در حالت نمونه، بازنویسی لایحه با هوش مصنوعی قفل است؛ با خرید اشتراک یا تحلیل تکی فعال می‌شود."
+                    : "برای بازنویسی پیشرفته لایحه با هوش مصنوعی در نسخه وب، خرید تحلیل یا ورود با حساب دارای اعتبار لازم است."}
+                </span>
+              </div>
+              {onOpenWebPaywall && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenWebPaywall();
+                  }}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-[11px] transition-colors shrink-0 cursor-pointer"
+                >
+                  خرید / فعال‌سازی با پرداخت
+                </button>
+              )}
+            </div>
+          )}
 
           {aiError && (
             <div className="p-3 rounded-xl bg-[#FAF6EC] border border-[#EBE4CF] text-xs text-[#8F7732] flex items-center gap-2">

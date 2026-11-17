@@ -93,8 +93,11 @@ export async function safeFetchJson<T = any>(
       await sleep(2000);
       return safeFetchJson<T>(input, init, retriesLeft - 1);
     }
-    const errorMsg = data?.error || data?.message || `خطا در پردازش درخواست (${res.status})`;
-    throw new Error(errorMsg);
+    const errorMsg = data?.message || data?.error || `خطا در پردازش درخواست (${res.status})`;
+    const apiErr = new Error(errorMsg) as Error & { status?: number; code?: string };
+    apiErr.status = res.status;
+    apiErr.code = data?.error;
+    throw apiErr;
   }
 
   return data as T;

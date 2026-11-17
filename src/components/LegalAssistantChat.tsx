@@ -16,15 +16,21 @@ import {
   FileText,
   AlertCircle,
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import ReactMarkdown from "react-markdown";
 import { JudicialNoticeAnalysis, ChatMessage, SectionQueryContext } from "../types";
 import { safeFetchJson } from "../utils/apiHelper";
+import { getWebAiHeaders } from "../services/webAuth";
 
 interface LegalAssistantChatProps {
   analysis: JudicialNoticeAnalysis | null;
   activeSectionContext?: SectionQueryContext | null;
   onClearSectionContext?: () => void;
   onOpenClauseInquiry?: () => void;
+  deviceId?: string;
+  isWebSampleLocked?: boolean;
+  isWebAccessLocked?: boolean;
+  onOpenWebPaywall?: () => void;
 }
 
 export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
@@ -32,7 +38,12 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
   activeSectionContext,
   onClearSectionContext,
   onOpenClauseInquiry,
+  deviceId,
+  isWebSampleLocked = false,
+  isWebAccessLocked = false,
+  onOpenWebPaywall,
 }) => {
+  const isWebLocked = !Capacitor.isNativePlatform() && (isWebSampleLocked || isWebAccessLocked);
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem("eblaghyar_chat_messages");
@@ -154,6 +165,16 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
     const query = (textToSend || input).trim();
     if (!query || isLoading) return;
 
+    if (isWebLocked) {
+      setError(
+        isWebSampleLocked
+          ? "پرسش از مشاور هوش مصنوعی در گزارش نمونه قفل است. برای بررسی ابلاغیه واقعی و استفاده از چت حقوقی، طرح وب تهیه کنید."
+          : "برای استفاده از مشاور هوش مصنوعی در نسخه وب، لطفاً تحلیل یا اشتراک فعال تهیه کنید."
+      );
+      if (onOpenWebPaywall) onOpenWebPaywall();
+      return;
+    }
+
     if (isLimitReached) {
       setError("سقف ۲ سوال رایگان برای این ابلاغیه به پایان رسیده است. برای بررسی بیشتر لطفاً ابلاغیه جدیدی بارگذاری کنید.");
       return;
@@ -188,11 +209,16 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
     setIsLoading(true);
 
     try {
+      const requestHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(!Capacitor.isNativePlatform() ? getWebAiHeaders(deviceId) : {}),
+      };
+
       const data = await safeFetchJson<{ success: boolean; answer: string; error?: string }>(
         "/api/chat",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: requestHeaders,
           body: JSON.stringify({
             messages: newMessages.slice(-8), // send last 8 for context
             contextAnalysis: analysis,
@@ -221,6 +247,11 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
       setLastFailedQuery(null);
     } catch (err: any) {
       console.error(err);
+      if (!Capacitor.isNativePlatform() && (err?.status === 402 || err?.status === 403)) {
+        setError(err.message || "برای پرسش از مشاور حقوقی، تهیه اعتبار یا اشتراک وب لازم است.");
+        if (onOpenWebPaywall) onOpenWebPaywall();
+        return;
+      }
       setError(err.message || "خطا در پاسخ‌گویی به سوال حقوقی.");
       setLastFailedQuery({ text: query, sectionContext: activeSection });
     } finally {
@@ -453,6 +484,25 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
 
       {/* Input Area */}
       <div className="p-3.5 sm:p-4 border-t border-[#E5E2D9] bg-white">
+        {isWebLocked && (
+          <div className="mb-3 px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <span>
+              {isWebSampleLocked
+                ? "چت با مشاور هوش مصنوعی در حالت نمونه قفل است. با خرید تحلیل یا اشتراک فعال می‌شود."
+                : "برای پرسش از مشاور هوش مصنوعی در نسخه وب، خرید تحلیل یا اشتراک فعال لازم است."}
+            </span>
+            {onOpenWebPaywall && (
+              <button
+                type="button"
+                onClick={onOpenWebPaywall}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-[11px] shrink-0 cursor-pointer"
+              >
+                خرید / فعال‌سازی با پرداخت
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Question Count Limit Banner */}
         <div className={`mb-3 px-3.5 py-2 rounded-xl text-xs flex items-center justify-between border ${
           isLimitReached 
@@ -483,9 +533,11 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isLimitReached || isLoading}
+            disabled={isLimitReached || isLoading || isWebLocked}
             placeholder={
-              isLimitReached
+              isWebLocked
+                ? "پس از خرید تحلیل یا اشتراک وب، می‌توانید سوالات حقوقی خود را بپرسید..."
+                : isLimitReached
                 ? "سقف ۲ سوال این ابلاغیه تمام شده است. برای تحلیل جدید، ابلاغیه جدید بارگذاری کنید."
                 : "سوال حقوقی خود را اینجا بنویسید (مثلاً: آیا با این ابلاغیه ممنوع‌الخروج می‌شوم؟)..."
             }
@@ -495,7 +547,7 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
           <button
             id="btn-send-chat"
             type="submit"
-            disabled={isLoading || !input.trim() || isLimitReached}
+            disabled={isLoading || !input.trim() || isLimitReached || isWebLocked}
             className="h-12 px-5 bg-[#7A8C70] hover:bg-[#68795F] disabled:bg-[#D1CEC4] text-white rounded-2xl font-bold flex items-center justify-center transition-colors shrink-0 disabled:cursor-not-allowed cursor-pointer shadow-lg shadow-[#7A8C70]/20"
           >
             {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4 rotate-180" />}

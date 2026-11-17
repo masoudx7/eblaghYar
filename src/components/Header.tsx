@@ -14,6 +14,7 @@ import {
   RefreshCw,
   CreditCard,
   CheckCircle2,
+  ReceiptText,
 } from "lucide-react";
 import { WebUserProfile } from "../services/webAuth";
 
@@ -33,6 +34,7 @@ interface HeaderProps {
   onOpenAuthModal?: () => void;
   onWebLogout?: () => void;
   onRefreshWebUser?: () => void;
+  onOpenWebOrders?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -51,6 +53,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAuthModal,
   onWebLogout,
   onRefreshWebUser,
+  onOpenWebOrders,
 }) => {
   const isNative = Capacitor.isNativePlatform();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -273,6 +276,20 @@ export const Header: React.FC<HeaderProps> = ({
                           <span>خرید بسته یا تمدید اشتراک</span>
                         </button>
                       )}
+                      {onOpenWebOrders && (
+                        <button
+                          id="web-user-orders-btn"
+                          type="button"
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
+                            onOpenWebOrders();
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                        >
+                          <ReceiptText className="w-3.5 h-3.5 text-slate-500" />
+                          <span>سفارش‌های من و پیگیری خرید</span>
+                        </button>
+                      )}
                       {onRefreshWebUser && (
                         <button
                           type="button"
@@ -304,16 +321,30 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
             ) : (
-              <button
-                id="web-login-btn"
-                type="button"
-                onClick={onOpenAuthModal}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors shadow-xs cursor-pointer"
-                title="ورود یا ثبت‌نام نسخه وب"
-              >
-                <LogIn className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-300" />
-                <span>ورود</span>
-              </button>
+              <div className="flex items-center gap-1.5">
+                {onOpenWebOrders && (
+                  <button
+                    id="web-guest-orders-btn"
+                    type="button"
+                    onClick={onOpenWebOrders}
+                    className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors cursor-pointer"
+                    title="پیگیری و بررسی مجدد سفارش پرداخت"
+                  >
+                    <ReceiptText className="w-3.5 h-3.5 text-slate-500" />
+                    <span className="hidden md:inline">پیگیری خرید</span>
+                  </button>
+                )}
+                <button
+                  id="web-login-btn"
+                  type="button"
+                  onClick={onOpenAuthModal}
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition-colors shadow-xs cursor-pointer"
+                  title="ورود یا ثبت‌نام نسخه وب"
+                >
+                  <LogIn className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-300" />
+                  <span>ورود</span>
+                </button>
+              </div>
             )
           )}
         </div>

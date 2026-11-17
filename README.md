@@ -57,23 +57,29 @@ CREATE INDEX IF NOT EXISTS idx_devices_id ON devices(device_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_device ON usage_logs(device_id);
 ```
 
-### آماده‌سازی جداول نسخه وب (`supabase/web_payments.sql`)
+### آماده‌سازی جداول نسخه وب و اندروید در Supabase
 
-> **جداسازی محیط وب و اندروید:** دیتابیس نسخه وب روی یک پروژه Supabase مجزا از نسخه اندروید قرار دارد و متغیرهای محیطی جدید فقط روی پروژه Vercel دامنه وب (`https://tahlil-yar.ir`) تنظیم می‌شوند.
+> **جداسازی کامل محیط وب و اندروید:** دیتابیس نسخه وب روی یک پروژه Supabase مجزا از نسخه اندروید قرار دارد و متغیرهای محیطی جدید وب فقط روی پروژه Vercel دامنه وب (`https://tahlil-yar.ir`) تنظیم می‌شوند.
 
-برای ایجاد جداول نسخه وب (`profiles` و `payments`)، تریگر ساخت خودکار پروفایل هنگام ثبت‌نام در `auth.users` و تنظیمات امنیتی RLS (بدون تغییر در جداول `devices` و `usage_logs`)، فایل `supabase/web_payments.sql` را در پروژه Supabase وب اجرا کنید:
+#### الف) پروژه Supabase وب (ترتیب اجباری اجرای اسکریپت‌ها در SQL Editor)
+اسکریپت‌های زیر همگی با `IF NOT EXISTS` (کاملاً idempotent) طراحی شده‌اند؛ آن‌ها را **به ترتیب زیر** در **SQL Editor** پروژه Supabase وب اجرا کنید:
+1. `supabase/web_payments.sql`: ایجاد جداول `profiles` و `payments`، تریگر ساخت خودکار پروفایل هنگام ثبت‌نام در `auth.users` و سیاست‌های پایه RLS.
+2. `supabase/web_payments_v2.sql`: افزودن ستون idempotency پرداخت (`granted_at`)، جدول `web_usage_logs`، ایندکس‌های کارایی و تابع اتمیک `increment_profile_credits`.
+3. `supabase/web_features_v3.sql`: ایجاد جدول تاریخچه ابلاغیه‌های کاربر (`web_analyses`) با سیاست‌های RLS مجزا برای خواندن/حذف امن توسط مالک حساب.
 
-**روش ۱: از طریق پنل Supabase (SQL Editor)**
-1. در داشبورد پروژه Supabase وب وارد بخش **SQL Editor** شوید و روی **New query** کلیک کنید.
-2. محتوای کامل فایل `supabase/web_payments.sql` را کپی کرده و در ویرایشگر قرار دهید.
-3. روی دکمه **Run** کلیک کنید. (این اسکریپت با `IF NOT EXISTS` نوشته شده و اجرای مجدد آن خطایی ایجاد نمی‌کند.)
-
-**روش ۲: از طریق خط فرمان (`psql` یا Supabase CLI)**
 ```bash
-psql "$DATABASE_URL" -f supabase/web_payments.sql
+psql "$WEB_DATABASE_URL" -f supabase/web_payments.sql
+psql "$WEB_DATABASE_URL" -f supabase/web_payments_v2.sql
+psql "$WEB_DATABASE_URL" -f supabase/web_features_v3.sql
 ```
 
-> **نکته امنیتی:** دسترسی نوشتن در جدول `profiles` (از جمله ستون `credits`) و تمام دسترسی‌های جدول `payments` تنها از طریق کلید `SUPABASE_SERVICE_ROLE_KEY` در بک‌اند مجاز است و کاربران کلاینت صرفاً امکان خواندن (`SELECT`) ردیف پروفایل خود را دارند.
+#### ب) پروژه Supabase اندروید (هات‌فیکس ضدتقلب خرید کافه‌بازار / مایکت)
+در پروژه Supabase قدیمی (مربوط به اپلیکیشن اندروید و `eblagh-yar.vercel.app`) اسکریپت زیر را اجرا کنید تا مصرف توکن خرید فقط یک بار مجاز باشد:
+```bash
+psql "$ANDROID_DATABASE_URL" -f supabase/android_purchases.sql
+```
+
+> **نکته امنیتی:** دسترسی نوشتن در جدول `profiles` (از جمله ستون `credits`)، تمام دسترسی‌های جدول `payments` و ثبت `consumed_purchase_tokens` تنها از طریق کلید `SUPABASE_SERVICE_ROLE_KEY` در بک‌اند مجاز است.
 
 ### تنظیم SMTP رایگان در Supabase (برای ایمیل تأیید و بازیابی رمز)
 
@@ -100,31 +106,34 @@ psql "$DATABASE_URL" -f supabase/web_payments.sql
 
 3. در بخش **Authentication → URL Configuration**:
    - مقدار **Site URL** را برابر `https://tahlil-yar.ir` قرار دهید.
-   - آدرس‌های `https://tahlil-yar.ir/**` و `http://localhost:3000/**` را به **Redirect URLs** اضافه کنید تا لینک‌های تأیید ایمیل و بازیابی رمز از پشت Cloudflare بدون خطا به برنامه برگردند.
+   - آدرس‌های `https://tahlil-yar.ir/**` و `http://localhost:3000/**` را به **Redirect URLs** اضافه کنید تا لینک‌های تأیید ایمیل، تغییر رمز و بازیابی حساب بدون خطا به برنامه برگردند.
 
 ---
 
 ## راهنمای استقرار (Deploy) نسخه وب روی Vercel و Cloudflare
 
-> **مهم — جداسازی کامل از نسخه اندروید (کافه‌بازار):** پروژه وب با دامنه `https://tahlil-yar.ir` باید روی یک پروژه **Vercel** مجزا (جدا از `eblagh-yar.vercel.app`) و متصل به یک پروژه **Supabase** جداگانه مستقر شود تا جدول `devices` و کاربران اندروید هیچ تغییری نکنند.
+> **مهم — جداسازی کامل از نسخه اندروید (کافه‌بازار):** پروژه وب با دامنه `https://tahlil-yar.ir` باید روی یک پروژه **Vercel** مجزا (جدا از `eblagh-yar.vercel.app`) و متصل به پروژه **Supabase وب** مستقر شود تا جدول `devices` و کاربران اندروید هیچ تغییری نکنند.
 
 ### ۱. ساخت پروژه Vercel وب
 1. در پنل Vercel یک پروژه جدید بسازید (جدا از پروژه قدیمی `eblagh-yar.vercel.app`).
-2. مخزن گیت‌هاب را متصل کرده و در **Settings → Git** مقدار **Production Branch** را برابر نام برنچ نسخه وب (`[BRANCH]`) قرار دهید.
+2. مخزن گیت‌هاب را متصل کرده و در **Settings → Git** مقدار **Production Branch** را روی برنچ نسخه وب (پس از ادغام در `web`) قرار دهید.
 3. تنظیمات بیلد را مطابق `vercel.json` قرار دهید (`Build Command: npm run build`، `Output Directory: dist`).
 
 ### ۲. تنظیم دامنه در Cloudflare (`tahlil-yar.ir`)
-در پنل Cloudflare دامنه `tahlil-yar.ir`، رکوردهای DNS زیر را **حتماً در حالت `DNS only` (ابر خاکستری)** ثبت کنید تا گواهی SSL و بازگشت درگاه بدون تداخل پروکسی صادر شود:
+در پنل Cloudflare دامنه `tahlil-yar.ir`، رکوردهای DNS زیر را **در حالت `DNS only` (ابر خاکستری)** ثبت کنید تا گواهی SSL و بازگشت درگاه بدون تداخل پروکسی صادر شود:
 
 | نوع رکورد (Type) | نام (Name) | مقدار (Target / Content) | وضعیت Proxy |
 | :--- | :--- | :--- | :--- |
 | `A` | `@` | `76.76.21.21` | **DNS only** (خاموش) |
 | `CNAME` | `www` | `cname.vercel-dns.com` | **DNS only** (خاموش) |
 
-سپس در پروژه Vercel وب به بخش **Settings → Domains** بروید و هر دو دامنه `tahlil-yar.ir` و `www.tahlil-yar.ir` را اضافه و تأیید کنید.
+> **هشدار امنیتی IP واقعی کلاینت (`TRUST_CF_HEADER`):**
+> تا زمانی که رکوردهای Cloudflare روی حالت **DNS only** هستند، مقدار `TRUST_CF_HEADER` را حتماً برابر `"false"` نگه دارید تا سرور برای تشخیص IP محدودیت نرخ (`Rate Limit`) فقط به `x-vercel-forwarded-for` اعتماد کند و امکان جعل هدر `cf-connecting-ip` وجود نداشته باشد. تنها در صورتی که پروکسی Cloudflare (ابر نارنجی) را فعال کردید، `TRUST_CF_HEADER="true"` را تنظیم کنید.
 
-### ۳. متغیرهای محیطی (Environment Variables) در پروژه Vercel وب
-در **Settings → Environment Variables** پروژه Vercel وب (فقط روی این پروژه، نه پروژه قدیمی بازار)، مقادیر زیر را برای محیط **Production** ثبت کنید:
+### ۳. متغیرهای محیطی (Environment Variables) در Vercel
+
+#### الف) پروژه Vercel وب (`tahlil-yar.ir`)
+در **Settings → Environment Variables** پروژه Vercel وب (فقط روی این پروژه) مقادیر زیر را برای **Production** ثبت کنید:
 
 - `NODE_ENV` = `production`
 - `APP_URL` = `https://tahlil-yar.ir`
@@ -135,18 +144,34 @@ psql "$DATABASE_URL" -f supabase/web_payments.sql
 - `SUPABASE_SERVICE_ROLE_KEY` = کلید Service Role پروژه Supabase جدید وب
 - `SUPABASE_ANON_KEY` = کلید Anon پروژه Supabase جدید وب
 - `ZARINPAL_MERCHANT_ID` = مرچنت کد ۳۶ کاراکتری زرین‌پال
+- `TRUST_CF_HEADER` = `false` (در حالت DNS only)
+- `UPSTASH_REDIS_REST_URL` = آدرس REST سرویس Upstash Redis (برای Rate-Limit توزیع‌شده روی Serverless Vercel)
+- `UPSTASH_REDIS_REST_TOKEN` = توکن REST سرویس Upstash Redis
+- `TURNSTILE_SITE_KEY` = کلید عمومی Cloudflare Turnstile (اختیاری برای ضدربات ثبت‌نام و بازیابی رمز)
+- `TURNSTILE_SECRET_KEY` = کلید محرمانه Cloudflare Turnstile
 
-> **نکته امنیتی:** هیچ‌کدام از کلیدهای `GEMINI_API_KEY`، `SUPABASE_SERVICE_ROLE_KEY`، `SUPABASE_ANON_KEY` و `ZARINPAL_MERCHANT_ID` نباید با پیشوند `VITE_` تعریف شوند؛ تمام ارتباطات حساس منحصراً از طریق سرور Express (`/api/web/*`) انجام می‌شود.
+#### ب) پروژه Vercel اندروید (`eblagh-yar.vercel.app`) — هات‌فیکس خرید بازار/مایکت
+روی پروژه Vercel قدیمی (اندروید)، علاوه بر `WEB_ONLY=false` و `DISABLE_LEGACY_PAYMENT=false`، موارد زیر را ست کنید:
+- `BAZAAR_RSA_PUBLIC_KEY` = کلید عمومی RSA برنامه در پیشخوان کافه‌بازار (برای تأیید امضای Poolakey)
+- `MYKET_RSA_PUBLIC_KEY` = کلید عمومی RSA مایکت (در صورت انتشار در مایکت)
+- `BAZAAR_DEVELOPER_API_TOKEN` و `ANDROID_PACKAGE_NAME` = توکن پیشخوان کافه‌بازار و شناسه پکیج جهت تأیید سرور-ساید مکمل
 
-### ۴. چک‌لیست نهایی پروژه Supabase جدید وب
-- [ ] اجرای کامل اسکریپت `supabase/web_payments.sql` در **SQL Editor** (ایجاد جداول `profiles` و `payments`، تریگر ثبت‌نام و سیاست‌های RLS).
-- [ ] تنظیم **Authentication → URL Configuration → Site URL** روی `https://tahlil-yar.ir`.
-- [ ] افزودن `https://tahlil-yar.ir/**` و `http://localhost:3000/**` به **Redirect URLs**.
-- [ ] فعال‌سازی و تنظیم **Custom SMTP** (مانند Brevo یا Resend) در **Authentication → Emails → SMTP Settings**.
+> **نکته امنیتی:** هیچ‌کدام از کلیدهای `GEMINI_API_KEY`، `SUPABASE_SERVICE_ROLE_KEY`، `SUPABASE_ANON_KEY`، `ZARINPAL_MERCHANT_ID`، `UPSTASH_REDIS_REST_TOKEN`، `TURNSTILE_SECRET_KEY` و `BAZAAR_*` نباید با پیشوند `VITE_` تعریف شوند.
 
-### ۵. تأیید درگاه زرین‌پال و قیمت‌های نهایی
-1. پس از دیپلوی موفق و بالا آمدن `https://tahlil-yar.ir` با گواهی SSL معتبر، دامنه را در پنل پذیرندگان زرین‌پال ثبت و تأیید کنید.
-2. پیش از انتشار عمومی، مبالغ آزمایشی `TODO` در آبجکت `WEB_PRODUCTS` فایل `api/app.ts` (به ریال) را با قیمت‌های نهایی جایگزین کرده و مجدداً دیپلوی کنید.
+### ۴. آزمون خودکار و CI
+- برای اجرای تست‌های یکپارچه بک‌اند (امنیت، پرداخت زرین‌پال/بازار، رزرواسیون اتمیک، کپچا و نرخ درخواست):
+  ```bash
+  npm test
+  ```
+- ورک‌فلوی `.github/workflows/web-ci.yml` در هر Push/PR روی برنچ `web` به‌طور خودکار `npm run lint`، `npm test`، `npm run build` و اسکن عدم نشت کلیدهای محرمانه در `dist/` را اجرا می‌کند (بدون تغییر در `android-build.yml`).
+
+### ۵. چک‌لیست نهایی راه‌اندازی عمومی وب
+- [ ] اجرای به ترتیب `web_payments.sql` ← `web_payments_v2.sql` ← `web_features_v3.sql` روی پروژه Supabase وب.
+- [ ] اجرای `android_purchases.sql` روی پروژه Supabase اندروید و ست کردن `BAZAAR_RSA_PUBLIC_KEY` روی پروژه Vercel اندروید.
+- [ ] تنظیم **Authentication → URL Configuration → Site URL** روی `https://tahlil-yar.ir` و **Redirect URLs** شامل `https://tahlil-yar.ir/**`.
+- [ ] فعال‌سازی و تنظیم **Custom SMTP** (Brevo یا Resend) در Supabase وب.
+- [ ] ست کردن Upstash Redis (`UPSTASH_REDIS_REST_*`) و Turnstile روی پروژه Vercel وب.
+- [ ] جایگزینی مبالغ آزمایشی `TODO` در آبجکت `WEB_PRODUCTS` فایل `api/app.ts` (به ریال) با قیمت‌های مصوب نهایی و تأیید دامنه در زرین‌پال.
 
 
 

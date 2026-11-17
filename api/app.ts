@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "node:crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
@@ -20,8 +21,13 @@ export interface DeviceRecord {
   fingerprint?: string;
 }
 
-export function getTodayDateString(): string {
-  return new Date().toISOString().split("T")[0];
+export function getTodayDateString(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 declare global {
@@ -82,8 +88,18 @@ function getInMemoryDevice(deviceId: string, fingerprint?: string): DeviceRecord
 // ==========================================
 
 let supabaseClient: SupabaseClient | null = null;
+let testOverrideServiceClient: any = null;
+let testOverrideAuthClient: any = null;
+
+export function __setSupabaseClientsForTest(serviceClient: any, authClient?: any): void {
+  testOverrideServiceClient = serviceClient ?? null;
+  testOverrideAuthClient = authClient ?? null;
+}
 
 function getSupabaseClient(): SupabaseClient | null {
+  if (testOverrideServiceClient) {
+    return testOverrideServiceClient as SupabaseClient;
+  }
   if (!supabaseClient) {
     const supabaseUrl = process.env.SUPABASE_URL?.trim();
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
@@ -108,6 +124,9 @@ function getSupabaseClient(): SupabaseClient | null {
 }
 
 function getSupabaseAuthClient(accessToken?: string): SupabaseClient | null {
+  if (testOverrideAuthClient) {
+    return testOverrideAuthClient as SupabaseClient;
+  }
   const supabaseUrl = process.env.SUPABASE_URL?.trim();
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY?.trim();
 
@@ -816,8 +835,8 @@ apiRouter.post("/analyze", requireLegacyAnalyzeEnabled, checkDeviceAccess, async
   }
 });
 
-// 1.5. Device Status Endpoint
-apiRouter.get("/device-status", async (req, res) => {
+// 1.5. Device Status Endpoint (Blocked in WEB_ONLY=true mode)
+apiRouter.get("/device-status", requireLegacyAnalyzeEnabled, async (req, res) => {
   try {
     const rawDeviceId = req.headers["x-device-id"];
     const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.trim();
@@ -936,12 +955,270 @@ const requireLegacyPaymentEnabled: express.RequestHandler = (_req, res, next) =>
   next();
 };
 
-// 2. Activate Premium Endpoint
+const inMemoryConsumedPurchaseTokens = new Set<string>();
+const inMemoryLegacyZarinpalOrders = new Map<
+  string,
+  {
+    authority: string;
+    device_id: string;
+    product_type: "coins_5" | "coins_15" | "premium";
+    amount_rials: number;
+    status: "pending" | "paid" | "failed";
+    ref_id?: string | null;
+    paid_at?: string | null;
+  }
+>();
+
+const ANDROID_COIN_PRODUCTS: Record<string, number> = {
+  coins_5: 5,
+  coins_15: 15,
+};
+
+const ANDROID_PREMIUM_PRODUCTS = new Set(["premium", "premium_1year", "annual"]);
+
+const LEGACY_ZARINPAL_PRICES: Record<
+  "coins_5" | "coins_15" | "premium",
+  { amountRials: number; label: string; coins: number; isPremium: boolean }
+> = {
+  coins_5: { amountRials: 790000, label: "بسته ۵ عددی سکه ابلاغ‌یار", coins: 5, isPremium: false },
+  coins_15: { amountRials: 1990000, label: "بسته ۱۵ عددی سکه ابلاغ‌یار", coins: 15, isPremium: false },
+  premium: { amountRials: 3990000, label: "اکانت دائم ابلاغ‌یار (۳ ابلاغ در روز)", coins: 0, isPremium: true },
+};
+
+function formatRsaPublicKeyToPem(rawKey: string): string {
+  const trimmed = rawKey.trim();
+  if (trimmed.includes("BEGIN PUBLIC KEY")) {
+    return trimmed;
+  }
+  const cleanB64 = trimmed.replace(/\s+/g, "");
+  const lines = cleanB64.match(/.{1,64}/g)?.join("\n") || cleanB64;
+  return `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`;
+}
+
+function getConfiguredStoreRsaKey(store: string): string | null {
+  if (store === "myket") {
+    const k = process.env.MYKET_RSA_PUBLIC_KEY?.trim() || process.env.BAZAAR_RSA_PUBLIC_KEY?.trim();
+    return k || null;
+  }
+  return process.env.BAZAAR_RSA_PUBLIC_KEY?.trim() || null;
+}
+
+function verifyPoolakeyRsaSignature(signedData: string, signature: string, rawPublicKey: string): boolean {
+  try {
+    const pem = formatRsaPublicKeyToPem(rawPublicKey);
+    for (const alg of ["RSA-SHA1", "RSA-SHA256"]) {
+      const verifier = crypto.createVerify(alg);
+      verifier.update(signedData, "utf8");
+      verifier.end();
+      if (verifier.verify(pem, signature, "base64")) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyAndConsumeAndroidPurchase(params: {
+  deviceId: string;
+  purchaseToken: string;
+  productId: string;
+  store: string;
+  signedData?: string;
+  signature?: string;
+  developerPayload?: string;
+  orderId?: string;
+}): Promise<{ ok: true } | { ok: false; status: number; error: string; message: string }> {
+  const { deviceId, purchaseToken, productId, store, signedData, signature, developerPayload, orderId } = params;
+
+  if (!purchaseToken || typeof purchaseToken !== "string" || purchaseToken.trim().length < 8) {
+    return {
+      ok: false,
+      status: 400,
+      error: "INVALID_PURCHASE_TOKEN",
+      message: "توکن خرید فروشگاه معتبر نیست.",
+    };
+  }
+
+  const trimmedToken = purchaseToken.trim();
+  const rsaKey = getConfiguredStoreRsaKey(store);
+
+  // 1) Verify RSA receipt signature if provided (or if RSA key is configured)
+  if (signedData && signature) {
+    if (!rsaKey) {
+      return {
+        ok: false,
+        status: 503,
+        error: "STORE_KEY_NOT_CONFIGURED",
+        message: "کلید عمومی تایید خرید فروشگاه روی سرور تنظیم نشده است.",
+      };
+    }
+
+    if (!verifyPoolakeyRsaSignature(signedData, signature, rsaKey)) {
+      return {
+        ok: false,
+        status: 403,
+        error: "INVALID_PURCHASE_SIGNATURE",
+        message: "امضای دیجیتال رسید خرید نامعتبر است.",
+      };
+    }
+
+    let parsedReceipt: any = null;
+    try {
+      parsedReceipt = JSON.parse(signedData);
+    } catch {
+      return {
+        ok: false,
+        status: 400,
+        error: "INVALID_SIGNED_DATA",
+        message: "ساختار رسید خرید نامعتبر است.",
+      };
+    }
+
+    if (parsedReceipt?.purchaseToken !== trimmedToken || parsedReceipt?.productId !== productId) {
+      return {
+        ok: false,
+        status: 403,
+        error: "RECEIPT_MISMATCH",
+        message: "اطلاعات رسید خرید با محصول یا توکن ارسالی مطابقت ندارد.",
+      };
+    }
+
+    const receiptPayload = String(parsedReceipt?.developerPayload ?? developerPayload ?? "").trim();
+    if (receiptPayload && !receiptPayload.includes(deviceId)) {
+      return {
+        ok: false,
+        status: 403,
+        error: "PAYLOAD_DEVICE_MISMATCH",
+        message: "رسید خرید متعلق به این دستگاه نیست.",
+      };
+    }
+  } else {
+    // 2) Fallback: check Store Server-to-Server API if configured, otherwise require signed receipt
+    const bazaarToken = process.env.BAZAAR_DEVELOPER_API_TOKEN?.trim();
+    const bazaarPkg = process.env.ANDROID_PACKAGE_NAME?.trim() || "ir.eblaghyar.app";
+    if (bazaarToken && store === "bazaar") {
+      try {
+        const validateUrl = `https://pardakht.cafebazaar.ir/devapi/v2/api/validate/${encodeURIComponent(
+          bazaarPkg
+        )}/inapp/${encodeURIComponent(productId)}/purchases/${encodeURIComponent(trimmedToken)}/`;
+        const storeRes = await fetch(validateUrl, {
+          method: "GET",
+          headers: { "CAFEBAZAAR-PISHKHAN-API-SECRET": bazaarToken },
+        });
+        if (!storeRes.ok) {
+          return {
+            ok: false,
+            status: 403,
+            error: "STORE_VERIFICATION_FAILED",
+            message: "خرید توسط سرور کافه‌بازار تأیید نشد.",
+          };
+        }
+        const storeData: any = await storeRes.json().catch(() => null);
+        if (storeData?.purchaseState !== 0) {
+          return {
+            ok: false,
+            status: 403,
+            error: "PURCHASE_NOT_COMPLETED",
+            message: "وضعیت خرید در فروشگاه تکمیل نشده یا لغو شده است.",
+          };
+        }
+        if (storeData?.developerPayload && !String(storeData.developerPayload).includes(deviceId)) {
+          return {
+            ok: false,
+            status: 403,
+            error: "PAYLOAD_DEVICE_MISMATCH",
+            message: "شناسه دستگاه در رسید کافه‌بازار مطابقت ندارد.",
+          };
+        }
+      } catch {
+        return {
+          ok: false,
+          status: 502,
+          error: "STORE_UNAVAILABLE",
+          message: "خطا در استعلام خرید از سرور کافه‌بازار.",
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        status: 403,
+        error: "MISSING_PURCHASE_VERIFICATION",
+        message: "امضای رسید خرید (signedData و signature) یا تأیید استور الزامی است.",
+      };
+    }
+  }
+
+  if (developerPayload && !String(developerPayload).includes(deviceId)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "PAYLOAD_DEVICE_MISMATCH",
+      message: "payload خرید با شناسه دستگاه مطابقت ندارد.",
+    };
+  }
+
+  // 3) Replay prevention: atomically record consumed purchase token
+  if (inMemoryConsumedPurchaseTokens.has(trimmedToken)) {
+    return {
+      ok: false,
+      status: 409,
+      error: "PURCHASE_ALREADY_CONSUMED",
+      message: "این رسید خرید قبلاً استفاده شده است.",
+    };
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    const { error: insertErr } = await supabase.from("consumed_purchase_tokens").insert({
+      purchase_token: trimmedToken,
+      device_id: deviceId,
+      product_id: productId,
+      store,
+      order_id: orderId || null,
+      developer_payload: developerPayload || null,
+    });
+
+    if (insertErr) {
+      if (insertErr.code === "23505" || String(insertErr.message || "").toLowerCase().includes("duplicate")) {
+        return {
+          ok: false,
+          status: 409,
+          error: "PURCHASE_ALREADY_CONSUMED",
+          message: "این رسید خرید قبلاً مصرف شده است.",
+        };
+      }
+      console.error("[Android Billing] Failed recording consumed token:", insertErr);
+      return {
+        ok: false,
+        status: 500,
+        error: "PURCHASE_LOG_FAILED",
+        message: "خطا در ثبت ایمن رسید خرید.",
+      };
+    }
+  }
+
+  inMemoryConsumedPurchaseTokens.add(trimmedToken);
+  return { ok: true };
+}
+
+// 2. Activate Premium Endpoint (Hardened with Poolakey/Store Verification + Replay Protection)
 apiRouter.post("/activate-premium", requireLegacyPaymentEnabled, async (req, res) => {
   try {
-    const { deviceId, purchaseToken } = req.body || {};
+    const {
+      deviceId,
+      purchaseToken,
+      productId = "premium",
+      store = "bazaar",
+      signedData,
+      signature,
+      developerPayload,
+      payload,
+      orderId,
+    } = req.body || {};
 
-    if (!deviceId) {
+    if (!deviceId || typeof deviceId !== "string") {
       return res.status(400).json({
         success: false,
         error: "MISSING_DEVICE_ID",
@@ -949,10 +1226,37 @@ apiRouter.post("/activate-premium", requireLegacyPaymentEnabled, async (req, res
       });
     }
 
+    if (!ANDROID_PREMIUM_PRODUCTS.has(String(productId))) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_PRODUCT_ID",
+        message: "شناسه محصول پرمیوم معتبر نیست.",
+      });
+    }
+
+    const verification = await verifyAndConsumeAndroidPurchase({
+      deviceId: deviceId.trim(),
+      purchaseToken,
+      productId: String(productId),
+      store: String(store || "bazaar").toLowerCase(),
+      signedData,
+      signature,
+      developerPayload: developerPayload ?? payload,
+      orderId,
+    });
+
+    if ("error" in verification) {
+      return res.status(verification.status).json({
+        success: false,
+        error: verification.error,
+        message: verification.message,
+      });
+    }
+
     // محاسبه تاریخ انقضا (یک سال از تاریخ خرید)
     const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
 
-    const memDevice = getInMemoryDevice(deviceId);
+    const memDevice = getInMemoryDevice(deviceId.trim());
     memDevice.is_premium = true;
     memDevice.premium_expires_at = expiresAt;
 
@@ -965,7 +1269,7 @@ apiRouter.post("/activate-premium", requireLegacyPaymentEnabled, async (req, res
           .from("devices")
           .upsert(
             {
-              device_id: deviceId,
+              device_id: deviceId.trim(),
               is_premium: true,
               premium_expires_at: expiresAt,
             },
@@ -997,13 +1301,22 @@ apiRouter.post("/activate-premium", requireLegacyPaymentEnabled, async (req, res
   }
 });
 
-// 2.5. Buy Coins Endpoint
+// 2.5. Buy Coins Endpoint (Hardened with Poolakey/Store Verification + Replay Protection)
 apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
   try {
-    const { deviceId, coinCount } = req.body || {};
-    const count = parseInt(coinCount, 10) || 5;
+    const {
+      deviceId,
+      purchaseToken,
+      productId,
+      store = "bazaar",
+      signedData,
+      signature,
+      developerPayload,
+      payload,
+      orderId,
+    } = req.body || {};
 
-    if (!deviceId) {
+    if (!deviceId || typeof deviceId !== "string") {
       return res.status(400).json({
         success: false,
         error: "MISSING_DEVICE_ID",
@@ -1011,7 +1324,36 @@ apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
       });
     }
 
-    const memDevice = getInMemoryDevice(deviceId);
+    const resolvedProductId = String(productId || "");
+    const count = ANDROID_COIN_PRODUCTS[resolvedProductId];
+    if (!count) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_PRODUCT_ID",
+        message: "شناسه بسته سکه معتبر نیست (coins_5 یا coins_15).",
+      });
+    }
+
+    const verification = await verifyAndConsumeAndroidPurchase({
+      deviceId: deviceId.trim(),
+      purchaseToken,
+      productId: resolvedProductId,
+      store: String(store || "bazaar").toLowerCase(),
+      signedData,
+      signature,
+      developerPayload: developerPayload ?? payload,
+      orderId,
+    });
+
+    if ("error" in verification) {
+      return res.status(verification.status).json({
+        success: false,
+        error: verification.error,
+        message: verification.message,
+      });
+    }
+
+    const memDevice = getInMemoryDevice(deviceId.trim());
     const currentTokens = typeof memDevice.free_tokens === "number" ? memDevice.free_tokens : 2;
     const newTokens = currentTokens + count;
     memDevice.free_tokens = newTokens;
@@ -1021,11 +1363,10 @@ apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
     try {
       const supabase = getSupabaseClient();
       if (supabase) {
-        // First get existing or upsert
         const { data: existing } = await supabase
           .from("devices")
           .select("free_tokens")
-          .eq("device_id", deviceId)
+          .eq("device_id", deviceId.trim())
           .maybeSingle();
 
         const baseTokens = existing && typeof existing.free_tokens === "number" ? existing.free_tokens : currentTokens;
@@ -1035,7 +1376,7 @@ apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
           .from("devices")
           .upsert(
             {
-              device_id: deviceId,
+              device_id: deviceId.trim(),
               free_tokens: updatedTokens,
             },
             { onConflict: "device_id" }
@@ -1068,8 +1409,13 @@ apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
   }
 });
 
+// Shared Web AI Access Middleware wrapper (hoists to webAiGuard defined below)
+const requireWebAiAccessIfWebOnly: express.RequestHandler = (req, res, next) => {
+  return webAiAccessMiddleware(req, res, next);
+};
+
 // 3. Generate Legal Defense Draft
-apiRouter.post("/generate-defense-draft", async (req, res) => {
+apiRouter.post("/generate-defense-draft", requireWebAiAccessIfWebOnly, async (req, res) => {
   try {
     const { analysis, draftType, userCustomFacts, userFullName, userNationalCode, attachedEvidences } = req.body || {};
 
@@ -1192,7 +1538,7 @@ ${attachedEvidences && attachedEvidences.length > 0 ? attachedEvidences.join(" -
 });
 
 // 4. Chat with Legal Assistant
-apiRouter.post("/chat", async (req, res) => {
+apiRouter.post("/chat", requireWebAiAccessIfWebOnly, async (req, res) => {
   try {
     const { messages, contextAnalysis, userQuestion, sectionContext } = req.body || {};
 
@@ -1280,39 +1626,36 @@ ${sectionPromptSnippet}
 });
 
 // ==========================================
-// Zarinpal Web Payment Endpoints
+// Legacy Zarinpal Payment Endpoints (Hardened - No Mock/Fallback)
 // ==========================================
-
-const zarinpalMockPending = new Map<string, { deviceId: string; productType: string }>();
 
 apiRouter.post("/payment/zarinpal/request", requireLegacyPaymentEnabled, async (req, res) => {
   try {
     const { productType, deviceId } = req.body || {};
-    if (!deviceId || !productType) {
-      return res.status(400).json({ success: false, error: "Missing deviceId or productType" });
+    if (!deviceId || typeof deviceId !== "string" || !productType || typeof productType !== "string") {
+      return res.status(400).json({ success: false, error: "شناسه دستگاه و نوع محصول الزامی هستند." });
     }
 
-    const prices: Record<string, { amountRials: number; label: string }> = {
-      coins_5: { amountRials: 790000, label: "بسته ۵ عددی سکه ابلاغ‌یار" },
-      coins_15: { amountRials: 1990000, label: "بسته ۱۵ عددی سکه ابلاغ‌یار" },
-      premium: { amountRials: 3990000, label: "اکانت دائم ابلاغ‌یار (۳ ابلاغ در روز)" },
-    };
-
-    const item = prices[productType] || prices.coins_5;
-    const callbackUrl = `${req.protocol}://${req.get("host")}/api/payment/zarinpal/verify?deviceId=${deviceId}&productType=${productType}`;
-
-    const merchantId = process.env.ZARINPAL_MERCHANT_ID || "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
-
-    if (merchantId === "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" || process.env.NODE_ENV !== "production") {
-      const mockAuthority = "A00000000000000000000000000" + Date.now();
-      zarinpalMockPending.set(mockAuthority, { deviceId, productType });
-      const paymentUrl = `${req.protocol}://${req.get("host")}/api/payment/zarinpal/verify?Authority=${mockAuthority}&Status=OK&deviceId=${deviceId}&productType=${productType}`;
-      return res.json({ success: true, paymentUrl });
+    if (!Object.prototype.hasOwnProperty.call(LEGACY_ZARINPAL_PRICES, productType)) {
+      return res.status(400).json({ success: false, error: "محصول درخواستی معتبر نیست." });
     }
+
+    const typedProduct = productType as "coins_5" | "coins_15" | "premium";
+    const item = LEGACY_ZARINPAL_PRICES[typedProduct];
+    const merchantId = getConfiguredZarinpalMerchantId();
+
+    if (!merchantId) {
+      return res.status(503).json({
+        success: false,
+        error: "درگاه پرداخت زرین‌پال پیکربندی نشده است (ZARINPAL_MERCHANT_ID).",
+      });
+    }
+
+    const callbackUrl = `${getWebRedirectBaseUrl(req)}/api/payment/zarinpal/verify`;
 
     const zarinpalRes = await fetch("https://api.zarinpal.com/pg/v4/payment/request.json", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         merchant_id: merchantId,
         amount: item.amountRials,
@@ -1321,74 +1664,183 @@ apiRouter.post("/payment/zarinpal/request", requireLegacyPaymentEnabled, async (
       }),
     });
 
-    const data = await zarinpalRes.json();
-    if (data?.data?.code === 100) {
-      const authority = data.data.authority;
-      const paymentUrl = `https://www.zarinpal.com/pg/StartPay/${authority}`;
-      return res.json({ success: true, paymentUrl });
-    } else {
-      throw new Error(data?.data?.message || "خطا در ایجاد تراکنش درگاه زرین‌پال");
+    const data: any = await zarinpalRes.json().catch(() => null);
+    if (data?.data?.code !== 100 || !data?.data?.authority) {
+      return res.status(502).json({
+        success: false,
+        error: data?.errors?.message || data?.data?.message || "درگاه زرین‌پال درخواست پرداخت را تایید نکرد.",
+      });
     }
+
+    const authority = String(data.data.authority);
+    const trimmedDeviceId = deviceId.trim();
+
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      await supabase.from("legacy_zarinpal_orders").insert({
+        authority,
+        device_id: trimmedDeviceId,
+        product_type: typedProduct,
+        amount_rials: item.amountRials,
+        status: "pending",
+      });
+    }
+    inMemoryLegacyZarinpalOrders.set(authority, {
+      authority,
+      device_id: trimmedDeviceId,
+      product_type: typedProduct,
+      amount_rials: item.amountRials,
+      status: "pending",
+    });
+
+    return res.json({
+      success: true,
+      authority,
+      paymentUrl: `https://www.zarinpal.com/pg/StartPay/${authority}`,
+    });
   } catch (e: any) {
-    console.error("Zarinpal request error:", e);
-    const fallbackUrl = `${req.protocol}://${req.get("host")}/api/payment/zarinpal/verify?Status=OK&Authority=TEST_${Date.now()}&deviceId=${req.body?.deviceId}&productType=${req.body?.productType}`;
-    return res.json({ success: true, paymentUrl: fallbackUrl });
+    console.error("Zarinpal legacy request error:", e);
+    return res.status(502).json({
+      success: false,
+      error: "خطا در برقراری ارتباط با درگاه زرین‌پال.",
+    });
   }
 });
 
 apiRouter.get("/payment/zarinpal/verify", requireLegacyPaymentEnabled, async (req, res) => {
   try {
-    const { Status, deviceId, productType } = req.query || {};
-    if (Status !== "OK") {
-      return res.send(`<html><body style="font-family:Tahoma;direction:rtl;text-align:center;padding:50px;"><h2 style="color:red;">پرداخت لغو شد یا انجام نشد.</h2><a href="/">بازگشت به برنامه</a></body></html>`);
-    }
+    const rawAuthority = req.query?.Authority;
+    const rawStatus = req.query?.Status;
+    const authority = (Array.isArray(rawAuthority) ? rawAuthority[0] : rawAuthority)?.toString().trim() || "";
+    const statusParam = (Array.isArray(rawStatus) ? rawStatus[0] : rawStatus)?.toString().trim() || "";
 
-    const targetDeviceId = String(deviceId || "");
-    const targetProduct = String(productType || "coins_5");
-
-    if (!targetDeviceId) {
-      return res.send(`<html><body style="font-family:Tahoma;direction:rtl;text-align:center;padding:50px;"><h2 style="color:red;">خطا: شناسه دستگاه یافت نشد.</h2><a href="/">بازگشت به برنامه</a></body></html>`);
+    if (!authority || !AUTHORITY_REGEX.test(authority)) {
+      return res.redirect("/?payment=failed");
     }
 
     const supabase = getSupabaseClient();
-    let tokensToAdd = 0;
-    let makePremium = false;
-
-    if (targetProduct === "coins_5") tokensToAdd = 5;
-    else if (targetProduct === "coins_15") tokensToAdd = 15;
-    else if (targetProduct === "premium") makePremium = true;
-
+    let order: any = null;
     if (supabase) {
-      const { data: dev } = await supabase.from("devices").select("*").eq("device_id", targetDeviceId).maybeSingle();
-      if (dev) {
+      const { data } = await supabase
+        .from("legacy_zarinpal_orders")
+        .select("*")
+        .eq("authority", authority)
+        .maybeSingle();
+      order = data;
+    }
+    if (!order) {
+      order = inMemoryLegacyZarinpalOrders.get(authority) || null;
+    }
+
+    if (!order) {
+      return res.redirect("/?payment=failed");
+    }
+
+    if (order.status === "paid") {
+      const item = LEGACY_ZARINPAL_PRICES[order.product_type as "coins_5" | "coins_15" | "premium"];
+      return res.redirect(`/?payment=success&added=${item?.coins || 0}&premium=${Boolean(item?.isPremium)}`);
+    }
+
+    if (statusParam !== "OK") {
+      if (supabase) {
         await supabase
-          .from("devices")
-          .update({
-            free_tokens: (dev.free_tokens || 0) + tokensToAdd,
-            is_premium: dev.is_premium || makePremium,
-          })
-          .eq("device_id", targetDeviceId);
+          .from("legacy_zarinpal_orders")
+          .update({ status: "failed" })
+          .eq("authority", authority)
+          .eq("status", "pending");
+      }
+      order.status = "failed";
+      return res.send(
+        `<html><body style="font-family:Tahoma;direction:rtl;text-align:center;padding:50px;"><h2 style="color:red;">پرداخت لغو شد یا انجام نشد.</h2><a href="/">بازگشت به برنامه</a></body></html>`
+      );
+    }
+
+    const merchantId = getConfiguredZarinpalMerchantId();
+    if (!merchantId) {
+      return res.redirect("/?payment=failed");
+    }
+
+    const verifyRes = await fetch("https://api.zarinpal.com/pg/v4/payment/verify.json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        merchant_id: merchantId,
+        amount: Number(order.amount_rials),
+        authority,
+      }),
+    });
+    const verifyData: any = await verifyRes.json().catch(() => null);
+    const code = verifyData?.data?.code;
+    const refId = verifyData?.data?.ref_id != null ? String(verifyData.data.ref_id) : null;
+
+    if (code !== 100 && code !== 101) {
+      if (supabase) {
+        await supabase
+          .from("legacy_zarinpal_orders")
+          .update({ status: "failed" })
+          .eq("authority", authority)
+          .in("status", ["pending"]);
+      }
+      order.status = "failed";
+      return res.redirect("/?payment=failed");
+    }
+
+    let claimed = false;
+    if (supabase) {
+      const { data: updatedOrder } = await supabase
+        .from("legacy_zarinpal_orders")
+        .update({ status: "paid", ref_id: refId, paid_at: new Date().toISOString() })
+        .eq("authority", authority)
+        .in("status", ["pending", "failed"])
+        .select("*")
+        .maybeSingle();
+      claimed = Boolean(updatedOrder);
+    } else if (order.status !== "paid") {
+      order.status = "paid";
+      order.ref_id = refId;
+      claimed = true;
+    }
+
+    const item = LEGACY_ZARINPAL_PRICES[order.product_type as "coins_5" | "coins_15" | "premium"];
+    const tokensToAdd = item?.coins || 0;
+    const makePremium = Boolean(item?.isPremium);
+
+    if (claimed) {
+      const targetDeviceId = order.device_id;
+      const expiresAt = makePremium ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString() : null;
+      if (supabase) {
+        const { data: dev } = await supabase.from("devices").select("*").eq("device_id", targetDeviceId).maybeSingle();
+        if (dev) {
+          await supabase
+            .from("devices")
+            .update({
+              free_tokens: (dev.free_tokens || 0) + tokensToAdd,
+              is_premium: dev.is_premium || makePremium,
+              ...(makePremium ? { premium_expires_at: expiresAt } : {}),
+            })
+            .eq("device_id", targetDeviceId);
+        } else {
+          await supabase.from("devices").insert({
+            device_id: targetDeviceId,
+            free_tokens: 2 + tokensToAdd,
+            is_premium: makePremium,
+            ...(makePremium ? { premium_expires_at: expiresAt } : {}),
+          });
+        }
       } else {
-        await supabase.from("devices").insert({
-          device_id: targetDeviceId,
-          free_tokens: 2 + tokensToAdd,
-          is_premium: makePremium,
-        });
+        const memDev = getInMemoryDevice(targetDeviceId);
+        memDev.free_tokens += tokensToAdd;
+        if (makePremium) {
+          memDev.is_premium = true;
+          memDev.premium_expires_at = expiresAt;
+        }
       }
-    } else {
-      let memDev = inMemoryDevices.get(targetDeviceId);
-      if (!memDev) {
-        memDev = { device_id: targetDeviceId, free_tokens: 2, is_premium: false };
-        inMemoryDevices.set(targetDeviceId, memDev);
-      }
-      memDev.free_tokens += tokensToAdd;
-      if (makePremium) memDev.is_premium = true;
     }
 
     return res.redirect(`/?payment=success&added=${tokensToAdd}&premium=${makePremium}`);
   } catch (e: any) {
-    console.error("Zarinpal verify error:", e);
-    return res.redirect(`/?payment=error&message=${encodeURIComponent(e.message)}`);
+    console.error("Zarinpal legacy verify error:", e);
+    return res.redirect(`/?payment=error&message=${encodeURIComponent(e.message || "verify_failed")}`);
   }
 });
 
@@ -1428,10 +1880,19 @@ const ALLOWED_WEB_MIME_TYPES = new Set([
   "image/webp",
 ]);
 
-function getClientIp(req: express.Request): string {
-  const cfIp = req.headers["cf-connecting-ip"];
-  const rawCf = (Array.isArray(cfIp) ? cfIp[0] : cfIp)?.trim();
-  if (rawCf) return rawCf;
+export function getClientIp(req: express.Request): string {
+  const vercelIp = req.headers["x-vercel-forwarded-for"];
+  const rawVercel = (Array.isArray(vercelIp) ? vercelIp[0] : vercelIp)?.trim();
+  if (rawVercel) {
+    const firstIp = rawVercel.split(",")[0]?.trim();
+    if (firstIp) return firstIp;
+  }
+
+  if (String(process.env.TRUST_CF_HEADER || "").trim().toLowerCase() === "true") {
+    const cfIp = req.headers["cf-connecting-ip"];
+    const rawCf = (Array.isArray(cfIp) ? cfIp[0] : cfIp)?.trim();
+    if (rawCf) return rawCf;
+  }
 
   const xff = req.headers["x-forwarded-for"];
   const rawXff = (Array.isArray(xff) ? xff[0] : xff)?.trim();
@@ -1447,6 +1908,76 @@ function getClientIp(req: express.Request): string {
   return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
+const rateLimiterResetCallbacks: Array<() => void> = [];
+
+export function __resetTestState(): void {
+  inMemoryDevices.clear();
+  inMemoryFingerprints.clear();
+  inMemoryConsumedPurchaseTokens.clear();
+  inMemoryLegacyZarinpalOrders.clear();
+  for (const resetFn of rateLimiterResetCallbacks) {
+    resetFn();
+  }
+}
+
+async function incrementUpstashRateLimit(
+  bucketKey: string,
+  windowMs: number
+): Promise<{ count: number; resetAt: number } | null> {
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  if (!redisUrl || !redisToken) {
+    return null;
+  }
+
+  try {
+    const baseUrl = redisUrl.replace(/\/+$/, "");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+
+    try {
+      const res = await fetch(`${baseUrl}/pipeline`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${redisToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify([
+          ["INCR", bucketKey],
+          ["PTTL", bucketKey],
+        ]),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) return null;
+      const results: any = await res.json().catch(() => null);
+      if (!Array.isArray(results) || results.length < 2) return null;
+
+      const count = Number(results[0]?.result);
+      let pttl = Number(results[1]?.result);
+      if (!Number.isFinite(count) || count <= 0) return null;
+
+      if (!Number.isFinite(pttl) || pttl <= 0) {
+        await fetch(`${baseUrl}/pipeline`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${redisToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify([["PEXPIRE", bucketKey, windowMs]]),
+        }).catch(() => {});
+        pttl = windowMs;
+      }
+
+      return { count, resetAt: Date.now() + pttl };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return null;
+  }
+}
+
 function createIpRateLimiter(options: {
   keyPrefix: string;
   windowMs: number;
@@ -1454,34 +1985,40 @@ function createIpRateLimiter(options: {
   message: string;
 }): express.RequestHandler {
   const hits = new Map<string, { count: number; resetAt: number }>();
+  rateLimiterResetCallbacks.push(() => hits.clear());
 
-  return (req, res, next) => {
+  return async (req, res, next) => {
     if (req.method === "OPTIONS") {
       return next();
     }
 
     const now = Date.now();
-    if (hits.size > 2000) {
-      for (const [key, entry] of hits.entries()) {
-        if (entry.resetAt <= now) {
-          hits.delete(key);
-        }
-      }
-    }
-
     const ip = getClientIp(req);
-    const bucketKey = `${options.keyPrefix}:${ip}`;
-    const existing = hits.get(bucketKey);
+    const bucketKey = `rl:${options.keyPrefix}:${ip}`;
 
     let count = 1;
     let resetAt = now + options.windowMs;
 
-    if (existing && existing.resetAt > now) {
-      count = existing.count + 1;
-      resetAt = existing.resetAt;
-    }
+    const redisResult = await incrementUpstashRateLimit(bucketKey, options.windowMs);
+    if (redisResult) {
+      count = redisResult.count;
+      resetAt = redisResult.resetAt;
+    } else {
+      if (hits.size > 2000) {
+        for (const [key, entry] of hits.entries()) {
+          if (entry.resetAt <= now) {
+            hits.delete(key);
+          }
+        }
+      }
 
-    hits.set(bucketKey, { count, resetAt });
+      const existing = hits.get(bucketKey);
+      if (existing && existing.resetAt > now) {
+        count = existing.count + 1;
+        resetAt = existing.resetAt;
+      }
+      hits.set(bucketKey, { count, resetAt });
+    }
 
     const remaining = Math.max(0, options.maxRequests - count);
     const retryAfterSec = Math.max(1, Math.ceil((resetAt - now) / 1000));
@@ -1531,9 +2068,263 @@ const webAnalyzeRateLimiter = createIpRateLimiter({
   message: "تعداد درخواست‌های تحلیل در بازه زمانی کوتاه بیش از حد مجاز است. لطفاً دقایقی دیگر تلاش کنید.",
 });
 
+const webAiRateLimiter = createIpRateLimiter({
+  keyPrefix: "web_ai_tools",
+  windowMs: 10 * 60 * 1000,
+  maxRequests: 30,
+  message: "تعداد درخواست‌های مشاوره و تنظیم لایحه در بازه زمانی کوتاه بیش از حد مجاز است. لطفاً کمی بعد تلاش کنید.",
+});
+
 apiRouter.use("/web/auth", webAuthRateLimiter);
 apiRouter.use("/web/payment", webPaymentRateLimiter);
 apiRouter.use("/web/analyze", webAnalyzeRateLimiter);
+
+async function verifyTurnstileIfEnabled(
+  token: unknown,
+  remoteIp: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const secretKey = process.env.TURNSTILE_SECRET_KEY?.trim();
+  if (!secretKey) {
+    return { ok: true };
+  }
+
+  const tokenStr = typeof token === "string" ? token.trim() : "";
+  if (!tokenStr) {
+    return { ok: false, error: "لطفاً تأیید امنیتی (کپچا) را تکمیل کنید." };
+  }
+
+  try {
+    const form = new URLSearchParams({
+      secret: secretKey,
+      response: tokenStr,
+      ...(remoteIp && remoteIp !== "unknown" ? { remoteip: remoteIp } : {}),
+    });
+    const verifyRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+    });
+    const data: any = await verifyRes.json().catch(() => null);
+    if (data?.success === true) {
+      return { ok: true };
+    }
+    return { ok: false, error: "تأیید امنیتی (کپچا) معتبر نبود. لطفاً دوباره امتحان کنید." };
+  } catch {
+    return { ok: false, error: "خطا در بررسی تأیید امنیتی. لطفاً دوباره تلاش کنید." };
+  }
+}
+
+async function logWebUsage(
+  serviceClient: SupabaseClient | null,
+  entry: {
+    userId?: string | null;
+    deviceId?: string | null;
+    paymentId?: string | null;
+    action: string;
+    accessMode?: string | null;
+    metadata?: Record<string, any> | null;
+  }
+): Promise<void> {
+  if (!serviceClient) return;
+  try {
+    await serviceClient.from("web_usage_logs").insert({
+      user_id: entry.userId || null,
+      device_id: entry.deviceId || null,
+      payment_id: entry.paymentId || null,
+      action: entry.action,
+      access_mode: entry.accessMode || null,
+      metadata: entry.metadata || null,
+    });
+  } catch {
+    // Audit logging must never fail the user request
+  }
+}
+
+type WebAccessMode =
+  | { kind: "annual"; userId: string; today: string; usedToday: number }
+  | { kind: "credits"; userId: string }
+  | { kind: "entitlement"; paymentId: string; deviceId: string };
+
+type WebAccessResolution =
+  | { ok: true; accessMode: WebAccessMode; verifiedUserId: string | null; deviceId: string }
+  | { ok: false; status: number; error: string; message: string; extra?: Record<string, any> };
+
+async function resolveWebAccessForRequest(
+  req: express.Request,
+  serviceClient: SupabaseClient
+): Promise<WebAccessResolution> {
+  const rawDeviceId = req.headers["x-device-id"] ?? req.body?.deviceId;
+  const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
+
+  const rawEntitlement = req.headers["x-entitlement-token"] ?? req.body?.entitlementToken;
+  const entitlementToken =
+    (Array.isArray(rawEntitlement) ? rawEntitlement[0] : rawEntitlement)?.toString().trim() || "";
+
+  const bearerToken = extractBearerToken(req);
+
+  let verifiedUserId: string | null = null;
+  let userProfile: any = null;
+  let annualDailyLimitHit = false;
+  let usedToday = 0;
+
+  if (bearerToken) {
+    const authClient = getSupabaseAuthClient();
+    if (authClient) {
+      const { data: userData, error: userErr } = await authClient.auth.getUser(bearerToken);
+      if (!userErr && userData?.user) {
+        verifiedUserId = userData.user.id;
+        const { data: existingProf } = await serviceClient
+          .from("profiles")
+          .select("*")
+          .eq("id", verifiedUserId)
+          .maybeSingle();
+
+        if (existingProf) {
+          userProfile = existingProf;
+        } else {
+          const { data: createdProf } = await serviceClient
+            .from("profiles")
+            .upsert({ id: verifiedUserId, email: userData.user.email || null }, { onConflict: "id" })
+            .select("*")
+            .maybeSingle();
+          userProfile = createdProf;
+        }
+      }
+    }
+  }
+
+  let accessMode: WebAccessMode | null = null;
+  const today = getTodayDateString();
+  const dailyLimit = WEB_PRODUCTS.annual.dailyLimit;
+
+  if (verifiedUserId && userProfile) {
+    const isAnnualActive = Boolean(
+      userProfile.annual_expires_at && new Date(userProfile.annual_expires_at) > new Date()
+    );
+    if (isAnnualActive) {
+      usedToday =
+        userProfile.last_analysis_date === today ? Number(userProfile.daily_analyses_count || 0) : 0;
+      if (usedToday < dailyLimit) {
+        accessMode = { kind: "annual", userId: verifiedUserId, today, usedToday };
+      } else {
+        annualDailyLimitHit = true;
+      }
+    }
+
+    if (!accessMode && Number(userProfile.credits || 0) > 0) {
+      accessMode = { kind: "credits", userId: verifiedUserId };
+    }
+  }
+
+  let entitlementConsumed = false;
+  if (
+    !accessMode &&
+    entitlementToken &&
+    UUID_REGEX.test(entitlementToken) &&
+    deviceId &&
+    DEVICE_ID_REGEX.test(deviceId)
+  ) {
+    const { data: paidRow, error: entErr } = await serviceClient
+      .from("payments")
+      .select("id, device_id, product, status, entitlement_used")
+      .eq("entitlement_token", entitlementToken)
+      .eq("product", "single")
+      .eq("status", "paid")
+      .eq("device_id", deviceId)
+      .maybeSingle();
+
+    if (!entErr && paidRow) {
+      if (paidRow.entitlement_used === false) {
+        accessMode = { kind: "entitlement", paymentId: paidRow.id, deviceId };
+      } else {
+        entitlementConsumed = true;
+      }
+    }
+  }
+
+  if (accessMode) {
+    return { ok: true, accessMode, verifiedUserId, deviceId };
+  }
+
+  if (annualDailyLimitHit) {
+    return {
+      ok: false,
+      status: 403,
+      error: "DAILY_LIMIT_REACHED",
+      message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد یا می‌توانید بسته اعتبار تهیه فرمایید.`,
+      extra: {
+        daily_used: usedToday,
+        daily_limit: dailyLimit,
+        daily_remaining: 0,
+      },
+    };
+  }
+
+  if (entitlementConsumed) {
+    return {
+      ok: false,
+      status: 402,
+      error: "ENTITLEMENT_CONSUMED",
+      message: "توکن تحلیل تکی شما قبلاً مصرف شده است. لطفاً برای تحلیل جدید اعتبار تهیه کنید.",
+    };
+  }
+
+  return {
+    ok: false,
+    status: 402,
+    error: "PAYMENT_REQUIRED",
+    message: "برای استفاده از این قابلیت در نسخه وب، لطفاً تحلیل تکی خریداری کنید یا وارد حساب کاربری دارای اعتبار شوید.",
+  };
+}
+
+async function webAiAccessMiddleware(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (String(process.env.WEB_ONLY || "").trim().toLowerCase() !== "true") {
+    return next();
+  }
+
+  return webAiRateLimiter(req, res, async () => {
+    try {
+      const serviceClient = getSupabaseClient();
+      if (!serviceClient) {
+        return res.status(503).json({
+          success: false,
+          error: "SERVICE_UNAVAILABLE",
+          message: "اتصال به سرویس دیتابیس برقرار نیست.",
+        });
+      }
+
+      const access = await resolveWebAccessForRequest(req, serviceClient);
+      if ("error" in access) {
+        return res.status(access.status).json({
+          success: false,
+          error: access.error,
+          message: access.message,
+          ...(access.extra || {}),
+        });
+      }
+
+      await logWebUsage(serviceClient, {
+        userId: access.verifiedUserId,
+        deviceId: access.deviceId,
+        action: req.path.includes("chat") ? "chat" : "defense_draft",
+        accessMode: access.accessMode.kind,
+      });
+
+      return next();
+    } catch (err: any) {
+      console.error("[Web AI Guard Error]:", err);
+      return res.status(500).json({
+        success: false,
+        error: "SERVER_ERROR",
+        message: "خطا در بررسی دسترسی حساب کاربری.",
+      });
+    }
+  });
+}
 
 function getWebRedirectBaseUrl(req: express.Request): string {
   const envUrl = process.env.APP_URL?.trim();
@@ -1650,6 +2441,14 @@ function extractBearerToken(req: express.Request): string | null {
   return match ? match[1].trim() : null;
 }
 
+// GET /api/web/config
+apiRouter.get("/web/config", (_req, res) => {
+  return res.json({
+    success: true,
+    turnstileSiteKey: process.env.TURNSTILE_SITE_KEY?.trim() || null,
+  });
+});
+
 // POST /api/web/auth/register
 apiRouter.post("/web/auth/register", webAuthMutationRateLimiter, async (req, res) => {
   try {
@@ -1658,6 +2457,14 @@ apiRouter.post("/web/auth/register", webAuthMutationRateLimiter, async (req, res
       return res.status(503).json({
         success: false,
         error: "سرویس احراز هویت وب پیکربندی نشده است (SUPABASE_ANON_KEY تنظیم نشده است).",
+      });
+    }
+
+    const turnstileCheck = await verifyTurnstileIfEnabled(req.body?.turnstileToken, getClientIp(req));
+    if ("error" in turnstileCheck) {
+      return res.status(400).json({
+        success: false,
+        error: turnstileCheck.error,
       });
     }
 
@@ -1885,6 +2692,14 @@ apiRouter.post("/web/auth/forgot-password", webAuthMutationRateLimiter, async (r
       });
     }
 
+    const turnstileCheck = await verifyTurnstileIfEnabled(req.body?.turnstileToken, getClientIp(req));
+    if ("error" in turnstileCheck) {
+      return res.status(400).json({
+        success: false,
+        error: turnstileCheck.error,
+      });
+    }
+
     const email = String(req.body?.email ?? "").trim().toLowerCase();
     if (!email || email.length > 254 || !EMAIL_REGEX.test(email)) {
       return res.status(400).json({
@@ -1967,6 +2782,82 @@ apiRouter.get("/web/auth/me", async (req, res) => {
   }
 });
 
+// POST /api/web/auth/update-password (after recovery redirect)
+apiRouter.post("/web/auth/update-password", webAuthMutationRateLimiter, async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است.",
+      });
+    }
+
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: "برای تنظیم رمز عبور جدید، توکن نشست بازیابی الزامی است.",
+      });
+    }
+
+    const newPassword = String(req.body?.password ?? "");
+    if (!newPassword || newPassword.length < 8 || newPassword.length > 128) {
+      return res.status(400).json({
+        success: false,
+        error: "رمز عبور جدید باید بین ۸ تا ۱۲۸ کاراکتر باشد.",
+      });
+    }
+
+    const { data: userData, error: userErr } = await authClient.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({
+        success: false,
+        error: translateSupabaseAuthError(userErr, "لینک بازیابی منقضی یا نامعتبر است. لطفاً مجدداً درخواست فراموشی رمز دهید."),
+      });
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (serviceClient?.auth?.admin?.updateUserById) {
+      const { error: adminErr } = await serviceClient.auth.admin.updateUserById(userData.user.id, {
+        password: newPassword,
+      });
+      if (adminErr) {
+        return res.status(400).json({
+          success: false,
+          error: translateSupabaseAuthError(adminErr, "تغییر رمز عبور انجام نشد."),
+        });
+      }
+    } else {
+      const scopedClient = getSupabaseAuthClient(token);
+      if (!scopedClient) {
+        return res.status(503).json({
+          success: false,
+          error: "سرویس احراز هویت در دسترس نیست.",
+        });
+      }
+      const { error: updateErr } = await scopedClient.auth.updateUser({ password: newPassword });
+      if (updateErr) {
+        return res.status(400).json({
+          success: false,
+          error: translateSupabaseAuthError(updateErr, "تغییر رمز عبور انجام نشد."),
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: "رمز عبور شما با موفقیت تغییر یافت.",
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Update Password Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در تغییر رمز عبور.",
+    });
+  }
+});
+
 // ==========================================
 // Web Zarinpal Payment Routes (/api/web/payment/*)
 // ==========================================
@@ -1987,83 +2878,127 @@ function getConfiguredZarinpalMerchantId(): string | null {
 
 async function grantWebPaymentEntitlement(
   serviceClient: SupabaseClient,
-  payment: { id: string; user_id?: string | null; product: string }
-): Promise<void> {
-  if (payment.product === "single") {
-    // single entitlement is already ready via payments.entitlement_token (entitlement_used = false)
-    return;
+  payment: { id: string; user_id?: string | null; device_id?: string | null; product: string; granted_at?: string | null }
+): Promise<boolean> {
+  if (payment.granted_at) {
+    return false;
   }
 
-  if (!payment.user_id) {
-    console.error("[Web Payment] Paid pack/annual order missing user_id:", payment.id);
-    return;
+  // Strictly atomic idempotency claim on granted_at IS NULL before mutating profile credits/subscription
+  const nowIso = new Date().toISOString();
+  const { data: grantClaim, error: claimErr } = await serviceClient
+    .from("payments")
+    .update({ granted_at: nowIso })
+    .eq("id", payment.id)
+    .eq("status", "paid")
+    .is("granted_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (claimErr) {
+    throw new Error(`خطا در قفل اتمیک اعطای سفارش: ${claimErr.message || "unknown"}`);
   }
 
-  const userId = payment.user_id;
+  if (!grantClaim) {
+    return false;
+  }
 
-  // Ensure profile row exists before updating
-  await serviceClient
-    .from("profiles")
-    .upsert({ id: userId }, { onConflict: "id", ignoreDuplicates: true });
-
-  if (payment.product === "pack_10") {
-    const creditsDelta = WEB_PRODUCTS.pack_10.credits;
-    // Try PostgreSQL atomic RPC first
-    const { error: rpcError } = await serviceClient.rpc("increment_profile_credits", {
-      p_user_id: userId,
-      p_delta: creditsDelta,
-    });
-
-    if (!rpcError) {
-      return;
+  try {
+    if (payment.product === "single") {
+      await logWebUsage(serviceClient, {
+        deviceId: payment.device_id,
+        paymentId: payment.id,
+        action: "payment_grant",
+        accessMode: "single",
+      });
+      return true;
     }
 
-    // Fallback: optimistic CAS update loop so concurrent requests never lose credits
-    for (let attempt = 0; attempt < 5; attempt++) {
+    if (!payment.user_id) {
+      throw new Error(`Paid pack/annual order missing user_id: ${payment.id}`);
+    }
+
+    const userId = payment.user_id;
+
+    // Ensure profile row exists before updating
+    await serviceClient
+      .from("profiles")
+      .upsert({ id: userId }, { onConflict: "id", ignoreDuplicates: true });
+
+    if (payment.product === "pack_10") {
+      const creditsDelta = WEB_PRODUCTS.pack_10.credits;
+      const { error: rpcError } = await serviceClient.rpc("increment_profile_credits", {
+        p_user_id: userId,
+        p_delta: creditsDelta,
+      });
+
+      if (rpcError) {
+        let casSuccess = false;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const { data: prof } = await serviceClient
+            .from("profiles")
+            .select("credits")
+            .eq("id", userId)
+            .maybeSingle();
+
+          const oldCredits = Number(prof?.credits ?? 0);
+          const { data: updated } = await serviceClient
+            .from("profiles")
+            .update({ credits: oldCredits + creditsDelta })
+            .eq("id", userId)
+            .eq("credits", oldCredits)
+            .select("credits")
+            .maybeSingle();
+
+          if (updated) {
+            casSuccess = true;
+            break;
+          }
+        }
+        if (!casSuccess) {
+          throw new Error("خطا در افزایش اتمیک اعتبار پروفایل.");
+        }
+      }
+    } else if (payment.product === "annual") {
       const { data: prof } = await serviceClient
         .from("profiles")
-        .select("credits")
+        .select("annual_expires_at")
         .eq("id", userId)
         .maybeSingle();
 
-      const oldCredits = Number(prof?.credits ?? 0);
-      const { data: updated } = await serviceClient
+      const nowMs = Date.now();
+      const existingMs = prof?.annual_expires_at ? new Date(prof.annual_expires_at).getTime() : 0;
+      const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
+      const newExpiresAt = new Date(
+        baseMs + WEB_PRODUCTS.annual.durationDays * 24 * 60 * 60 * 1000
+      ).toISOString();
+
+      const { error: updateErr } = await serviceClient
         .from("profiles")
-        .update({ credits: oldCredits + creditsDelta })
-        .eq("id", userId)
-        .eq("credits", oldCredits)
-        .select("credits")
-        .maybeSingle();
+        .update({ annual_expires_at: newExpiresAt })
+        .eq("id", userId);
 
-      if (updated) {
-        return;
+      if (updateErr) {
+        throw new Error("خطا در ثبت اشتراک یک‌ساله در پروفایل.");
       }
     }
-    throw new Error("خطا در افزایش اتمیک اعتبار پروفایل.");
-  }
 
-  if (payment.product === "annual") {
-    const { data: prof } = await serviceClient
-      .from("profiles")
-      .select("annual_expires_at")
-      .eq("id", userId)
-      .maybeSingle();
-
-    const nowMs = Date.now();
-    const existingMs = prof?.annual_expires_at ? new Date(prof.annual_expires_at).getTime() : 0;
-    const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
-    const newExpiresAt = new Date(
-      baseMs + WEB_PRODUCTS.annual.durationDays * 24 * 60 * 60 * 1000
-    ).toISOString();
-
-    const { error: updateErr } = await serviceClient
-      .from("profiles")
-      .update({ annual_expires_at: newExpiresAt })
-      .eq("id", userId);
-
-    if (updateErr) {
-      throw new Error("خطا در ثبت اشتراک یک‌ساله در پروفایل.");
-    }
+    await logWebUsage(serviceClient, {
+      userId,
+      deviceId: payment.device_id,
+      paymentId: payment.id,
+      action: "payment_grant",
+      accessMode: payment.product,
+    });
+    return true;
+  } catch (grantErr) {
+    // Roll back granted_at so /recheck or callback retry can recover cleanly
+    await serviceClient
+      .from("payments")
+      .update({ granted_at: null })
+      .eq("id", payment.id)
+      .eq("granted_at", nowIso);
+    throw grantErr;
   }
 }
 
@@ -2295,8 +3230,11 @@ apiRouter.get("/web/payment/verify", async (req, res) => {
       return res.redirect("/?payment=failed");
     }
 
-    // اگر سفارش قبلاً paid شده است، بدون تغییر مجدد نتیجه موفق را برگردان
+    // اگر سفارش قبلاً paid شده است: اگر هنوز granted_at ثبت نشده بود، ایمن اعطا کن
     if (order.status === "paid") {
+      if (!order.granted_at) {
+        await grantWebPaymentEntitlement(serviceClient, order);
+      }
       return res.redirect(`/?payment=success&order_id=${encodeURIComponent(order.id)}`);
     }
 
@@ -2311,10 +3249,6 @@ apiRouter.get("/web/payment/verify", async (req, res) => {
       return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
     }
 
-    if (order.status === "failed") {
-      return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
-    }
-
     const merchantId = getConfiguredZarinpalMerchantId();
     if (!merchantId) {
       await serviceClient
@@ -2325,7 +3259,7 @@ apiRouter.get("/web/payment/verify", async (req, res) => {
       return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
     }
 
-    // فراخوانی verify.json با دقیقاً همان amount_rials ذخیره‌شده در سفارش
+    // فراخوانی verify.json با دقیقاً همان amount_rials ذخیره‌شده در سفارش (حتی برای بازیابی failed -> paid)
     let verifyData: any = null;
     try {
       const verifyRes = await fetch("https://api.zarinpal.com/pg/v4/payment/verify.json", {
@@ -2349,35 +3283,9 @@ apiRouter.get("/web/payment/verify", async (req, res) => {
     const code = verifyData?.data?.code;
     const refId = verifyData?.data?.ref_id != null ? String(verifyData.data.ref_id) : order.ref_id || null;
 
-    if (code === 100) {
-      // تغییر وضعیت اتمیک از pending به paid تا در صورت همزمانی فقط یک درخواست اعطا انجام دهد
+    if (code === 100 || code === 101) {
+      // تغییر وضعیت اتمیک pending|failed به paid و اعطای idempotent با شرط granted_at IS NULL
       const { data: claimedOrder, error: claimErr } = await serviceClient
-        .from("payments")
-        .update({
-          status: "paid",
-          ref_id: refId,
-          paid_at: new Date().toISOString(),
-        })
-        .eq("id", order.id)
-        .eq("status", "pending")
-        .select("*")
-        .maybeSingle();
-
-      if (claimErr) {
-        console.error("[Web Payment Verify] Failed claiming pending order:", claimErr);
-        return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
-      }
-
-      if (claimedOrder) {
-        await grantWebPaymentEntitlement(serviceClient, claimedOrder);
-      }
-
-      return res.redirect(`/?payment=success&order_id=${encodeURIComponent(order.id)}`);
-    }
-
-    if (code === 101) {
-      // کد 101: قبلاً در زرین‌پال تایید شده است -> فقط همگام‌سازی وضعیت/ref_id بدون اعطای مجدد
-      await serviceClient
         .from("payments")
         .update({
           status: "paid",
@@ -2385,7 +3293,19 @@ apiRouter.get("/web/payment/verify", async (req, res) => {
           paid_at: order.paid_at || new Date().toISOString(),
         })
         .eq("id", order.id)
-        .eq("status", "pending");
+        .in("status", ["pending", "failed"])
+        .select("*")
+        .maybeSingle();
+
+      if (claimErr) {
+        console.error("[Web Payment Verify] Failed claiming order:", claimErr);
+        return res.redirect(`/?payment=failed&order_id=${encodeURIComponent(order.id)}`);
+      }
+
+      const targetOrder = claimedOrder || (await serviceClient.from("payments").select("*").eq("id", order.id).maybeSingle()).data;
+      if (targetOrder && !targetOrder.granted_at) {
+        await grantWebPaymentEntitlement(serviceClient, targetOrder);
+      }
 
       return res.redirect(`/?payment=success&order_id=${encodeURIComponent(order.id)}`);
     }
@@ -2401,6 +3321,213 @@ apiRouter.get("/web/payment/verify", async (req, res) => {
   } catch (err: any) {
     console.error("[Web Payment Verify] Unexpected error:", err);
     return res.redirect("/?payment=failed");
+  }
+});
+
+// 2.5) POST /api/web/payment/recheck (Payment Recovery for pending/failed orders > 60s)
+apiRouter.post("/web/payment/recheck", async (req, res) => {
+  try {
+    const rawOrderId = req.body?.order_id ?? req.query?.order_id;
+    const orderId = (Array.isArray(rawOrderId) ? rawOrderId[0] : rawOrderId)?.toString().trim() || "";
+    if (!orderId || !UUID_REGEX.test(orderId)) {
+      return res.status(400).json({
+        success: false,
+        error: "شناسه سفارش (order_id) معتبر نیست.",
+      });
+    }
+
+    const rawDeviceId = req.body?.deviceId ?? req.headers["x-device-id"];
+    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
+    if (deviceId && !DEVICE_ID_REGEX.test(deviceId)) {
+      return res.status(400).json({
+        success: false,
+        error: "شناسه دستگاه (deviceId) معتبر نیست.",
+      });
+    }
+
+    const bearerToken = extractBearerToken(req);
+    if (!deviceId && !bearerToken) {
+      return res.status(401).json({
+        success: false,
+        error: "برای بررسی مجدد سفارش، توکن حساب کاربری یا شناسه دستگاه الزامی است.",
+      });
+    }
+
+    let callerUserId: string | null = null;
+    if (bearerToken) {
+      const authClient = getSupabaseAuthClient();
+      if (authClient) {
+        const { data: userData } = await authClient.auth.getUser(bearerToken);
+        if (userData?.user) {
+          callerUserId = userData.user.id;
+        }
+      }
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس بررسی پرداخت در دسترس نیست.",
+      });
+    }
+
+    const { data: order, error: selectErr } = await serviceClient
+      .from("payments")
+      .select("*")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (selectErr || !order) {
+      return res.status(404).json({
+        success: false,
+        error: "سفارش مورد نظر یافت نشد.",
+      });
+    }
+
+    const userMatches = Boolean(order.user_id && callerUserId && order.user_id === callerUserId);
+    const deviceMatches = Boolean(order.device_id && deviceId && order.device_id === deviceId);
+    if (!userMatches && !deviceMatches) {
+      return res.status(403).json({
+        success: false,
+        error: "شما مجاز به بررسی مجدد این سفارش نیستید.",
+      });
+    }
+
+    if (order.status === "paid") {
+      if (!order.granted_at) {
+        await grantWebPaymentEntitlement(serviceClient, order);
+      }
+      const canRevealSingleEntitlement = order.product === "single" && deviceMatches;
+      return res.json({
+        success: true,
+        order_id: order.id,
+        product: order.product,
+        status: "paid",
+        amount_rials: order.amount_rials,
+        ref_id: order.ref_id || null,
+        paid_at: order.paid_at || null,
+        entitlement_token: canRevealSingleEntitlement ? order.entitlement_token : null,
+        entitlement_used: Boolean(order.entitlement_used),
+      });
+    }
+
+    if (!order.authority) {
+      return res.status(400).json({
+        success: false,
+        error: "NO_AUTHORITY",
+        message: "برای این سفارش شناسه تراکنش درگاه ثبت نشده است.",
+      });
+    }
+
+    const createdMs = order.created_at ? new Date(order.created_at).getTime() : 0;
+    if (createdMs > 0 && Date.now() - createdMs < 60_000) {
+      return res.status(400).json({
+        success: false,
+        error: "TOO_EARLY",
+        message: "لطفاً حداقل ۶۰ ثانیه پس از ایجاد سفارش برای بررسی مجدد صبر کنید.",
+      });
+    }
+
+    const merchantId = getConfiguredZarinpalMerchantId();
+    if (!merchantId) {
+      return res.status(503).json({
+        success: false,
+        error: "درگاه پرداخت زرین‌پال پیکربندی نشده است.",
+      });
+    }
+
+    let verifyData: any = null;
+    try {
+      const verifyRes = await fetch("https://api.zarinpal.com/pg/v4/payment/verify.json", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          merchant_id: merchantId,
+          amount: Number(order.amount_rials),
+          authority: order.authority,
+        }),
+      });
+      verifyData = await verifyRes.json().catch(() => null);
+    } catch {
+      return res.status(502).json({
+        success: false,
+        error: "خطا در ارتباط با درگاه زرین‌پال جهت استعلام مجدد. لطفاً دقایقی دیگر تلاش کنید.",
+      });
+    }
+
+    const code = verifyData?.data?.code;
+    const refId = verifyData?.data?.ref_id != null ? String(verifyData.data.ref_id) : order.ref_id || null;
+
+    if (code === 100 || code === 101) {
+      const { data: claimedOrder } = await serviceClient
+        .from("payments")
+        .update({
+          status: "paid",
+          ...(refId ? { ref_id: refId } : {}),
+          paid_at: order.paid_at || new Date().toISOString(),
+        })
+        .eq("id", order.id)
+        .in("status", ["pending", "failed"])
+        .select("*")
+        .maybeSingle();
+
+      const targetOrder = claimedOrder || (await serviceClient.from("payments").select("*").eq("id", order.id).maybeSingle()).data;
+      if (targetOrder && !targetOrder.granted_at) {
+        await grantWebPaymentEntitlement(serviceClient, targetOrder);
+      }
+
+      await logWebUsage(serviceClient, {
+        userId: callerUserId,
+        deviceId,
+        paymentId: order.id,
+        action: "payment_recheck",
+        accessMode: order.product,
+        metadata: { code, refId },
+      });
+
+      const finalOrder = targetOrder || order;
+      const canRevealSingleEntitlement = finalOrder.product === "single" && deviceMatches;
+      return res.json({
+        success: true,
+        order_id: finalOrder.id,
+        product: finalOrder.product,
+        status: "paid",
+        amount_rials: finalOrder.amount_rials,
+        ref_id: refId,
+        paid_at: finalOrder.paid_at || new Date().toISOString(),
+        entitlement_token: canRevealSingleEntitlement ? finalOrder.entitlement_token : null,
+        entitlement_used: Boolean(finalOrder.entitlement_used),
+      });
+    }
+
+    await serviceClient
+      .from("payments")
+      .update({ status: "failed" })
+      .eq("id", order.id)
+      .eq("status", "pending");
+
+    return res.json({
+      success: true,
+      order_id: order.id,
+      product: order.product,
+      status: "failed",
+      amount_rials: order.amount_rials,
+      ref_id: null,
+      paid_at: null,
+      entitlement_token: null,
+      entitlement_used: false,
+      message: "پرداخت توسط درگاه زرین‌پال تایید نشد.",
+    });
+  } catch (err: any) {
+    console.error("[Web Payment Recheck Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در بررسی مجدد وضعیت پرداخت.",
+    });
   }
 });
 
@@ -2455,7 +3582,7 @@ apiRouter.get("/web/payment/status", async (req, res) => {
 
     const { data: payment, error: selectErr } = await serviceClient
       .from("payments")
-      .select("id, user_id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+      .select("id, user_id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at, granted_at")
       .eq("id", orderId)
       .maybeSingle();
 
@@ -2474,6 +3601,12 @@ apiRouter.get("/web/payment/status", async (req, res) => {
         success: false,
         error: "شما مجاز به مشاهده وضعیت این سفارش نیستید.",
       });
+    }
+
+    if (payment.status === "paid" && !payment.granted_at) {
+      await grantWebPaymentEntitlement(serviceClient, payment).catch((e) =>
+        console.warn("[Web Payment Status] Self-heal grant warning:", e)
+      );
     }
 
     const canRevealSingleEntitlement =
@@ -2501,13 +3634,440 @@ apiRouter.get("/web/payment/status", async (req, res) => {
   }
 });
 
-// ==========================================
-// Web Paid-Only Analyze Route (POST /api/web/analyze)
-// ==========================================
-
-apiRouter.post("/web/analyze", async (req, res) => {
+// 4) GET /api/web/orders (List authenticated user's orders or recover a guest order by order_id + deviceId)
+apiRouter.get("/web/orders", async (req, res) => {
   try {
     const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس سفارش‌ها در دسترس نیست.",
+      });
+    }
+
+    const rawDeviceId = req.query?.deviceId ?? req.headers["x-device-id"];
+    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
+    const rawOrderId = req.query?.order_id;
+    const orderId = (Array.isArray(rawOrderId) ? rawOrderId[0] : rawOrderId)?.toString().trim() || "";
+    const bearerToken = extractBearerToken(req);
+
+    let callerUserId: string | null = null;
+    if (bearerToken) {
+      const authClient = getSupabaseAuthClient();
+      if (authClient) {
+        const { data: userData } = await authClient.auth.getUser(bearerToken);
+        if (userData?.user) {
+          callerUserId = userData.user.id;
+        }
+      }
+    }
+
+    if (orderId) {
+      if (!UUID_REGEX.test(orderId)) {
+        return res.status(400).json({ success: false, error: "شناسه سفارش معتبر نیست." });
+      }
+      if (!deviceId && !callerUserId) {
+        return res.status(401).json({ success: false, error: "برای بازیابی سفارش ورود یا شناسه مرورگر لازم است." });
+      }
+      const { data: row } = await serviceClient
+        .from("payments")
+        .select("id, user_id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+        .eq("id", orderId)
+        .maybeSingle();
+
+      if (!row) {
+        return res.status(404).json({ success: false, error: "سفارشی با این شناسه یافت نشد." });
+      }
+      const ownsRow =
+        (row.user_id && callerUserId && row.user_id === callerUserId) ||
+        (row.device_id && deviceId && row.device_id === deviceId);
+      if (!ownsRow) {
+        return res.status(403).json({ success: false, error: "این سفارش متعلق به شما نیست." });
+      }
+      return res.json({
+        success: true,
+        orders: [
+          {
+            order_id: row.id,
+            product: row.product,
+            amount_rials: row.amount_rials,
+            status: row.status,
+            ref_id: row.ref_id || null,
+            created_at: row.created_at,
+            paid_at: row.paid_at || null,
+            entitlement_used: Boolean(row.entitlement_used),
+            entitlement_token:
+              row.product === "single" &&
+              row.status === "paid" &&
+              !row.entitlement_used &&
+              row.device_id === deviceId
+                ? row.entitlement_token
+                : null,
+          },
+        ],
+      });
+    }
+
+    if (!callerUserId) {
+      if (deviceId && DEVICE_ID_REGEX.test(deviceId)) {
+        const { data: guestRows } = await serviceClient
+          .from("payments")
+          .select("id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+          .eq("device_id", deviceId)
+          .order("created_at", { ascending: false })
+          .limit(15);
+
+        return res.json({
+          success: true,
+          orders: (guestRows || []).map((row: any) => ({
+            order_id: row.id,
+            product: row.product,
+            amount_rials: row.amount_rials,
+            status: row.status,
+            ref_id: row.ref_id || null,
+            created_at: row.created_at,
+            paid_at: row.paid_at || null,
+            entitlement_used: Boolean(row.entitlement_used),
+            entitlement_token:
+              row.product === "single" && row.status === "paid" && !row.entitlement_used
+                ? row.entitlement_token
+                : null,
+          })),
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        error: "برای مشاهده سفارش‌های خود وارد حساب کاربری شوید یا شناسه سفارش را وارد کنید.",
+      });
+    }
+
+    const { data: rows, error: listErr } = await serviceClient
+      .from("payments")
+      .select("id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+      .eq("user_id", callerUserId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    if (listErr) {
+      return res.status(500).json({ success: false, error: "خطا در دریافت فهرست سفارش‌ها." });
+    }
+
+    return res.json({
+      success: true,
+      orders: (rows || []).map((row: any) => ({
+        order_id: row.id,
+        product: row.product,
+        amount_rials: row.amount_rials,
+        status: row.status,
+        ref_id: row.ref_id || null,
+        created_at: row.created_at,
+        paid_at: row.paid_at || null,
+        entitlement_used: Boolean(row.entitlement_used),
+        entitlement_token:
+          row.product === "single" &&
+          row.status === "paid" &&
+          !row.entitlement_used &&
+          deviceId &&
+          row.device_id === deviceId
+            ? row.entitlement_token
+            : null,
+      })),
+    });
+  } catch (err: any) {
+    console.error("[Web Orders Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در دریافت تاریخچه سفارش‌ها.",
+    });
+  }
+});
+
+// ==========================================
+// Web Server-Side Analysis History Routes (/api/web/analyses)
+// ==========================================
+
+apiRouter.get("/web/analyses", async (req, res) => {
+  try {
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({ success: false, error: "توکن احراز هویت ارسال نشده است." });
+    }
+    const authClient = getSupabaseAuthClient();
+    const serviceClient = getSupabaseClient();
+    if (!authClient || !serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس تاریخچه در دسترس نیست." });
+    }
+
+    const { data: userData, error: userErr } = await authClient.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ success: false, error: "نشست کاربری نامعتبر است." });
+    }
+
+    const { data: rows, error: listErr } = await serviceClient
+      .from("web_analyses")
+      .select("id, file_name, title, summary, authority, urgency, analysis_json, created_at")
+      .eq("user_id", userData.user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (listErr) {
+      return res.status(500).json({ success: false, error: "خطا در بارگذاری تاریخچه تحلیل‌ها." });
+    }
+
+    return res.json({
+      success: true,
+      analyses: rows || [],
+    });
+  } catch (err: any) {
+    console.error("[Web Analyses List Error]:", err);
+    return res.status(500).json({ success: false, error: "خطای سرور در دریافت تاریخچه تحلیل‌ها." });
+  }
+});
+
+apiRouter.delete("/web/analyses/:id", async (req, res) => {
+  try {
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({ success: false, error: "توکن احراز هویت ارسال نشده است." });
+    }
+    const id = String(req.params?.id || "").trim();
+    if (!id || !UUID_REGEX.test(id)) {
+      return res.status(400).json({ success: false, error: "شناسه تحلیل معتبر نیست." });
+    }
+
+    const authClient = getSupabaseAuthClient();
+    const serviceClient = getSupabaseClient();
+    if (!authClient || !serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس در دسترس نیست." });
+    }
+    const { data: userData, error: userErr } = await authClient.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ success: false, error: "نشست کاربری نامعتبر است." });
+    }
+
+    await serviceClient.from("web_analyses").delete().eq("id", id).eq("user_id", userData.user.id);
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error("[Web Analyses Delete Error]:", err);
+    return res.status(500).json({ success: false, error: "خطا در حذف مورد تاریخچه." });
+  }
+});
+
+apiRouter.delete("/web/analyses", async (req, res) => {
+  try {
+    const token = extractBearerToken(req);
+    if (!token) {
+      return res.status(401).json({ success: false, error: "توکن احراز هویت ارسال نشده است." });
+    }
+    const authClient = getSupabaseAuthClient();
+    const serviceClient = getSupabaseClient();
+    if (!authClient || !serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس در دسترس نیست." });
+    }
+    const { data: userData, error: userErr } = await authClient.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ success: false, error: "نشست کاربری نامعتبر است." });
+    }
+
+    await serviceClient.from("web_analyses").delete().eq("user_id", userData.user.id);
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error("[Web Analyses Clear Error]:", err);
+    return res.status(500).json({ success: false, error: "خطا در پاک‌سازی تاریخچه." });
+  }
+});
+
+// ==========================================
+// Web Paid-Only Analyze Route (POST /api/web/analyze)
+// Atomic Reserve-Before-Gemini + Automatic Refund on Error
+// ==========================================
+
+async function reserveWebAccessUnit(
+  serviceClient: SupabaseClient,
+  accessMode: WebAccessMode
+): Promise<{ ok: true } | { ok: false; status: number; error: string; message: string }> {
+  const dailyLimit = WEB_PRODUCTS.annual.dailyLimit;
+
+  if (accessMode.kind === "annual") {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data: freshProf } = await serviceClient
+        .from("profiles")
+        .select("daily_analyses_count, last_analysis_date")
+        .eq("id", accessMode.userId)
+        .maybeSingle();
+
+      const currentCount =
+        freshProf?.last_analysis_date === accessMode.today
+          ? Number(freshProf?.daily_analyses_count || 0)
+          : 0;
+
+      if (currentCount >= dailyLimit) {
+        return {
+          ok: false,
+          status: 403,
+          error: "DAILY_LIMIT_REACHED",
+          message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است.`,
+        };
+      }
+
+      let query = serviceClient
+        .from("profiles")
+        .update({
+          daily_analyses_count: currentCount + 1,
+          last_analysis_date: accessMode.today,
+        })
+        .eq("id", accessMode.userId);
+
+      if (freshProf?.last_analysis_date === accessMode.today) {
+        query = query.eq("daily_analyses_count", currentCount);
+      } else if (freshProf?.last_analysis_date) {
+        query = query.eq("last_analysis_date", freshProf.last_analysis_date);
+      } else {
+        query = query.is("last_analysis_date", null);
+      }
+
+      const { data: updatedProf } = await query.select("id").maybeSingle();
+      if (updatedProf) {
+        return { ok: true };
+      }
+    }
+    return {
+      ok: false,
+      status: 403,
+      error: "DAILY_LIMIT_REACHED",
+      message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است.`,
+    };
+  }
+
+  if (accessMode.kind === "credits") {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data: freshProf } = await serviceClient
+        .from("profiles")
+        .select("credits")
+        .eq("id", accessMode.userId)
+        .maybeSingle();
+
+      const curCredits = Number(freshProf?.credits ?? 0);
+      if (curCredits <= 0) {
+        break;
+      }
+
+      const { data: updatedProf } = await serviceClient
+        .from("profiles")
+        .update({ credits: curCredits - 1 })
+        .eq("id", accessMode.userId)
+        .eq("credits", curCredits)
+        .select("credits")
+        .maybeSingle();
+
+      if (updatedProf) {
+        return { ok: true };
+      }
+    }
+    return {
+      ok: false,
+      status: 402,
+      error: "PAYMENT_REQUIRED",
+      message: "اعتبار حساب کاربری شما برای این تحلیل کافی نیست.",
+    };
+  }
+
+  const { data: claimedPayment } = await serviceClient
+    .from("payments")
+    .update({ entitlement_used: true })
+    .eq("id", accessMode.paymentId)
+    .eq("entitlement_used", false)
+    .eq("status", "paid")
+    .eq("device_id", accessMode.deviceId)
+    .select("id")
+    .maybeSingle();
+
+  if (!claimedPayment) {
+    return {
+      ok: false,
+      status: 402,
+      error: "ENTITLEMENT_CONSUMED",
+      message: "توکن تحلیل تکی قبلاً مصرف شده یا معتبر نیست.",
+    };
+  }
+
+  return { ok: true };
+}
+
+async function refundWebAccessUnit(serviceClient: SupabaseClient, accessMode: WebAccessMode): Promise<void> {
+  try {
+    if (accessMode.kind === "annual") {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: freshProf } = await serviceClient
+          .from("profiles")
+          .select("daily_analyses_count, last_analysis_date")
+          .eq("id", accessMode.userId)
+          .maybeSingle();
+
+        if (!freshProf || freshProf.last_analysis_date !== accessMode.today) {
+          return;
+        }
+        const curCount = Number(freshProf.daily_analyses_count || 0);
+        if (curCount <= 0) {
+          return;
+        }
+        const { data: updated } = await serviceClient
+          .from("profiles")
+          .update({ daily_analyses_count: curCount - 1 })
+          .eq("id", accessMode.userId)
+          .eq("daily_analyses_count", curCount)
+          .eq("last_analysis_date", accessMode.today)
+          .select("id")
+          .maybeSingle();
+        if (updated) return;
+      }
+      return;
+    }
+
+    if (accessMode.kind === "credits") {
+      const { error: rpcErr } = await serviceClient.rpc("increment_profile_credits", {
+        p_user_id: accessMode.userId,
+        p_delta: 1,
+      });
+      if (!rpcErr) return;
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: freshProf } = await serviceClient
+          .from("profiles")
+          .select("credits")
+          .eq("id", accessMode.userId)
+          .maybeSingle();
+        const curCredits = Number(freshProf?.credits ?? 0);
+        const { data: updated } = await serviceClient
+          .from("profiles")
+          .update({ credits: curCredits + 1 })
+          .eq("id", accessMode.userId)
+          .eq("credits", curCredits)
+          .select("id")
+          .maybeSingle();
+        if (updated) return;
+      }
+      return;
+    }
+
+    if (accessMode.kind === "entitlement") {
+      await serviceClient
+        .from("payments")
+        .update({ entitlement_used: false })
+        .eq("id", accessMode.paymentId)
+        .eq("entitlement_used", true);
+    }
+  } catch (refundErr) {
+    console.error("[Web Analyze Refund Error]:", refundErr);
+  }
+}
+
+apiRouter.post("/web/analyze", async (req, res) => {
+  const serviceClient = getSupabaseClient();
+  let reservedAccess: WebAccessMode | null = null;
+
+  try {
     if (!serviceClient) {
       return res.status(503).json({
         success: false,
@@ -2515,123 +4075,25 @@ apiRouter.post("/web/analyze", async (req, res) => {
       });
     }
 
-    const rawDeviceId = req.headers["x-device-id"] ?? req.body?.deviceId;
-    const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
-
-    const rawEntitlement = req.headers["x-entitlement-token"];
-    const entitlementToken = (Array.isArray(rawEntitlement) ? rawEntitlement[0] : rawEntitlement)?.toString().trim() || "";
-
-    const bearerToken = extractBearerToken(req);
-
-    let verifiedUserId: string | null = null;
-    let userProfile: any = null;
-    let isAnnualActive = false;
-    let annualDailyLimitHit = false;
-    let usedToday = 0;
-
-    // الف و ب) بررسی سشن معتبر کاربر وب
-    if (bearerToken) {
-      const authClient = getSupabaseAuthClient();
-      if (authClient) {
-        const { data: userData, error: userErr } = await authClient.auth.getUser(bearerToken);
-        if (!userErr && userData?.user) {
-          verifiedUserId = userData.user.id;
-          const { data: existingProf } = await serviceClient
-            .from("profiles")
-            .select("*")
-            .eq("id", verifiedUserId)
-            .maybeSingle();
-
-          if (existingProf) {
-            userProfile = existingProf;
-          } else {
-            const { data: createdProf } = await serviceClient
-              .from("profiles")
-              .upsert({ id: verifiedUserId, email: userData.user.email || null }, { onConflict: "id" })
-              .select("*")
-              .maybeSingle();
-            userProfile = createdProf;
-          }
-        }
-      }
-    }
-
-    type WebAccessMode =
-      | { kind: "annual"; userId: string; today: string; usedToday: number }
-      | { kind: "credits"; userId: string }
-      | { kind: "entitlement"; paymentId: string; deviceId: string };
-
-    let accessMode: WebAccessMode | null = null;
-    const today = getTodayDateString();
-    const dailyLimit = WEB_PRODUCTS.annual.dailyLimit;
-
-    if (verifiedUserId && userProfile) {
-      // الف) اشتراک یک‌ساله فعال با سقف روزانه
-      isAnnualActive = Boolean(
-        userProfile.annual_expires_at && new Date(userProfile.annual_expires_at) > new Date()
-      );
-      if (isAnnualActive) {
-        usedToday =
-          userProfile.last_analysis_date === today
-            ? Number(userProfile.daily_analyses_count || 0)
-            : 0;
-        if (usedToday < dailyLimit) {
-          accessMode = { kind: "annual", userId: verifiedUserId, today, usedToday };
-        } else {
-          annualDailyLimitHit = true;
-        }
-      }
-
-      // ب) اعتبار پروفایل (credits > 0)
-      if (!accessMode && Number(userProfile.credits || 0) > 0) {
-        accessMode = { kind: "credits", userId: verifiedUserId };
-      }
-    }
-
-    // ج) توکن تحلیل تکی یک‌بارمصرف متعلق به همین deviceId
-    if (
-      !accessMode &&
-      entitlementToken &&
-      UUID_REGEX.test(entitlementToken) &&
-      deviceId &&
-      DEVICE_ID_REGEX.test(deviceId)
-    ) {
-      const { data: paidRow, error: entErr } = await serviceClient
-        .from("payments")
-        .select("id, device_id, product, status, entitlement_used")
-        .eq("entitlement_token", entitlementToken)
-        .eq("product", "single")
-        .eq("status", "paid")
-        .eq("entitlement_used", false)
-        .eq("device_id", deviceId)
-        .maybeSingle();
-
-      if (!entErr && paidRow) {
-        accessMode = { kind: "entitlement", paymentId: paidRow.id, deviceId };
-      }
-    }
-
-    if (!accessMode) {
-      if (annualDailyLimitHit) {
-        return res.status(403).json({
-          success: false,
-          error: "DAILY_LIMIT_REACHED",
-          message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است. سهمیه روزانه شما فردا مجدداً شارژ خواهد شد یا می‌توانید بسته اعتبار تهیه فرمایید.`,
-          daily_used: usedToday,
-          daily_limit: dailyLimit,
-          daily_remaining: 0,
-        });
-      }
-
-      return res.status(402).json({
+    const access = await resolveWebAccessForRequest(req, serviceClient);
+    if ("error" in access) {
+      return res.status(access.status).json({
         success: false,
-        error: "PAYMENT_REQUIRED",
-        message: "برای تحلیل ابلاغیه در نسخه وب، لطفاً تحلیل تکی خریداری کنید یا وارد حساب کاربری دارای اعتبار شوید.",
+        error: access.error,
+        message: access.message,
+        ...(access.extra || {}),
       });
     }
 
-    // اعتبارسنجی ورودی تحلیل پیش از فراخوانی Gemini (بدون کسر سهمیه)
-    const { fileBase64, mimeType, rawText } = req.body || {};
+    // اعتبارسنجی ورودی تحلیل پیش از رزرو سهمیه و فراخوانی Gemini
+    const { fileBase64, mimeType, rawText, fileName } = req.body || {};
+    if (!fileBase64 && !rawText) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_INPUT",
+        message: "لطفاً فایل پی‌دی‌اف، تصویر ابلاغیه یا متن آن را ارسال کنید.",
+      });
+    }
     if (fileBase64 != null && typeof fileBase64 !== "string") {
       return res.status(400).json({
         success: false,
@@ -2657,130 +4119,83 @@ apiRouter.post("/web/analyze", async (req, res) => {
       }
     }
 
-    // اجرای تحلیل با تابع مشترک runAnalysis (بدون مصرف سهمیه پیش از پاسخ موفق)
+    // ۱) رزرو اتمیک سهمیه پیش از اجرای Gemini (جلوگیری از Race Condition همزمان روی ۱ اعتبار/توکن)
+    const reservation = await reserveWebAccessUnit(serviceClient, access.accessMode);
+    if ("error" in reservation) {
+      return res.status(reservation.status).json({
+        success: false,
+        error: reservation.error,
+        message: reservation.message,
+      });
+    }
+    reservedAccess = access.accessMode;
+
+    // ۲) اجرای تحلیل با تابع مشترک runAnalysis
     const analysisResult = await runAnalysis({ fileBase64, mimeType, rawText });
     if (!analysisResult.ok) {
-      // در خطاهای Gemini یا سند نامربوط هیچ اعتباری/سهمیه‌ای کم نمی‌شود
+      // ۳) بازگشت خودکار سهمیه در صورت خطای AI یا نامربوط بودن سند
+      await refundWebAccessUnit(serviceClient, reservedAccess);
+      await logWebUsage(serviceClient, {
+        userId: access.verifiedUserId,
+        deviceId: access.deviceId,
+        paymentId: reservedAccess.kind === "entitlement" ? reservedAccess.paymentId : null,
+        action: "analyze_refund",
+        accessMode: reservedAccess.kind,
+        metadata: { reason: analysisResult.body?.error || "analysis_failed" },
+      });
+      reservedAccess = null;
       return res.status(analysisResult.status || 500).json(analysisResult.body || { success: false });
     }
 
-    // مصرف اتمیک فقط پس از پاسخ موفق Gemini و معتبر بودن سند
-    if (accessMode.kind === "annual") {
-      let annualConsumed = false;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const { data: freshProf } = await serviceClient
-          .from("profiles")
-          .select("daily_analyses_count, last_analysis_date")
-          .eq("id", accessMode.userId)
-          .maybeSingle();
+    reservedAccess = null;
 
-        const currentCount =
-          freshProf?.last_analysis_date === accessMode.today
-            ? Number(freshProf?.daily_analyses_count || 0)
-            : 0;
-
-        if (currentCount >= dailyLimit) {
-          return res.status(403).json({
-            success: false,
-            error: "DAILY_LIMIT_REACHED",
-            message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است.`,
-            daily_used: currentCount,
-            daily_limit: dailyLimit,
-            daily_remaining: 0,
-          });
-        }
-
-        let query = serviceClient
-          .from("profiles")
-          .update({
-            daily_analyses_count: currentCount + 1,
-            last_analysis_date: accessMode.today,
+    // ذخیره سرور-ساید تاریخچه برای کاربر لاگین‌شده و ثبت لاگ مصرف (بدون ایجاد وقفه در صورت خطای جانبی)
+    let savedAnalysisId: string | null = null;
+    if (access.verifiedUserId && analysisResult.data) {
+      try {
+        const cleanFileName =
+          typeof fileName === "string" && fileName.trim()
+            ? fileName.trim().slice(0, 200)
+            : "ابلاغیه قضایی";
+        const { data: savedRow } = await serviceClient
+          .from("web_analyses")
+          .insert({
+            user_id: access.verifiedUserId,
+            file_name: cleanFileName,
+            title: String(analysisResult.data.title || cleanFileName).slice(0, 300),
+            summary: String(analysisResult.data.summaryInSimpleWords || "").slice(0, 2000),
+            authority: String(analysisResult.data.caseDetails?.issuingAuthority || "مرجع قضایی").slice(0, 300),
+            urgency: ["high", "medium", "low"].includes(analysisResult.data.urgencyLevel)
+              ? analysisResult.data.urgencyLevel
+              : "medium",
+            analysis_json: analysisResult.data,
           })
-          .eq("id", accessMode.userId);
-
-        if (freshProf?.last_analysis_date === accessMode.today) {
-          query = query.eq("daily_analyses_count", currentCount);
-        } else if (freshProf?.last_analysis_date) {
-          query = query.eq("last_analysis_date", freshProf.last_analysis_date);
-        } else {
-          query = query.is("last_analysis_date", null);
-        }
-
-        const { data: updatedProf } = await query.select("id").maybeSingle();
-        if (updatedProf) {
-          annualConsumed = true;
-          break;
-        }
-      }
-
-      if (!annualConsumed) {
-        return res.status(403).json({
-          success: false,
-          error: "DAILY_LIMIT_REACHED",
-          message: `سقف روزانه اشتراک یک‌ساله شما (${dailyLimit} تحلیل ابلاغیه در روز) تکمیل شده است.`,
-        });
-      }
-    } else if (accessMode.kind === "credits") {
-      let creditConsumed = false;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const { data: freshProf } = await serviceClient
-          .from("profiles")
-          .select("credits")
-          .eq("id", accessMode.userId)
+          .select("id")
           .maybeSingle();
-
-        const curCredits = Number(freshProf?.credits ?? 0);
-        if (curCredits <= 0) {
-          break;
-        }
-
-        const { data: updatedProf } = await serviceClient
-          .from("profiles")
-          .update({ credits: curCredits - 1 })
-          .eq("id", accessMode.userId)
-          .eq("credits", curCredits)
-          .select("credits")
-          .maybeSingle();
-
-        if (updatedProf) {
-          creditConsumed = true;
-          break;
-        }
-      }
-
-      if (!creditConsumed) {
-        return res.status(402).json({
-          success: false,
-          error: "PAYMENT_REQUIRED",
-          message: "اعتبار حساب کاربری شما برای این تحلیل کافی نیست.",
-        });
-      }
-    } else if (accessMode.kind === "entitlement") {
-      const { data: claimedPayment } = await serviceClient
-        .from("payments")
-        .update({ entitlement_used: true })
-        .eq("id", accessMode.paymentId)
-        .eq("entitlement_used", false)
-        .eq("status", "paid")
-        .eq("device_id", accessMode.deviceId)
-        .select("id")
-        .maybeSingle();
-
-      if (!claimedPayment) {
-        return res.status(402).json({
-          success: false,
-          error: "PAYMENT_REQUIRED",
-          message: "توکن تحلیل تکی قبلاً مصرف شده یا معتبر نیست.",
-        });
+        savedAnalysisId = savedRow?.id || null;
+      } catch {
+        // non-blocking
       }
     }
+
+    await logWebUsage(serviceClient, {
+      userId: access.verifiedUserId,
+      deviceId: access.deviceId,
+      paymentId: access.accessMode.kind === "entitlement" ? access.accessMode.paymentId : null,
+      action: "analyze",
+      accessMode: access.accessMode.kind,
+    });
 
     return res.json({
       success: true,
       data: analysisResult.data,
-      accessMode: accessMode.kind,
+      accessMode: access.accessMode.kind,
+      ...(savedAnalysisId ? { savedAnalysisId } : {}),
     });
   } catch (error: any) {
+    if (serviceClient && reservedAccess) {
+      await refundWebAccessUnit(serviceClient, reservedAccess);
+    }
     console.error("[Web Analyze Error]:", error);
     return res.status(500).json({
       success: false,

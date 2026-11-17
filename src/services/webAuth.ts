@@ -75,24 +75,27 @@ export function clearWebSession(): void {
 export function consumeWebAuthRedirectParams(): {
   authNotice: string | null;
   hasTokens: boolean;
+  isRecoveryMode: boolean;
 } {
   if (typeof window === "undefined") {
-    return { authNotice: null, hasTokens: false };
+    return { authNotice: null, hasTokens: false, isRecoveryMode: false };
   }
 
   let authNotice: string | null = null;
   let hasTokens = false;
+  let isRecoveryMode = false;
 
   try {
     const url = new URL(window.location.href);
     const authParam = url.searchParams.get("auth");
+    const typeParam = url.searchParams.get("type");
 
     if (window.location.hash && window.location.hash.includes("access_token=")) {
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
       const accessToken = hashParams.get("access_token");
       const refreshToken = hashParams.get("refresh_token") || "";
       const expiresAtRaw = hashParams.get("expires_at");
-      const type = hashParams.get("type");
+      const type = hashParams.get("type") || typeParam;
 
       if (accessToken) {
         saveWebSession({
@@ -103,24 +106,29 @@ export function consumeWebAuthRedirectParams(): {
         hasTokens = true;
       }
 
-      if (type === "signup" || authParam === "verified") {
+      if (type === "recovery" || authParam === "recovery") {
+        isRecoveryMode = true;
+        authNotice = "لینک بازیابی تأیید شد. لطفاً رمز عبور جدید حساب خود را ثبت کنید.";
+      } else if (type === "signup" || authParam === "verified") {
         authNotice = "ایمیل شما با موفقیت تأیید شد و حساب کاربری شما فعال است.";
-      } else if (type === "recovery" || authParam === "recovery") {
-        authNotice = "لینک بازیابی تأیید شد. در صورت نیاز می‌توانید رمز عبور خود را تنظیم یا با حساب خود ادامه دهید.";
       }
     } else if (authParam === "verified") {
       authNotice = "ایمیل شما تأیید شد. اکنون می‌توانید وارد حساب کاربری خود شوید.";
+    } else if (authParam === "recovery" || typeParam === "recovery") {
+      isRecoveryMode = true;
+      authNotice = "لینک بازیابی تأیید شد. لطفاً رمز عبور جدید حساب خود را ثبت کنید.";
     }
 
-    if (authParam || (window.location.hash && window.location.hash.includes("access_token="))) {
+    if (authParam || typeParam || (window.location.hash && window.location.hash.includes("access_token="))) {
       url.searchParams.delete("auth");
+      url.searchParams.delete("type");
       window.history.replaceState({}, document.title, url.pathname + url.search);
     }
   } catch {
     // ignore URL parse issues
   }
 
-  return { authNotice, hasTokens };
+  return { authNotice, hasTokens, isRecoveryMode };
 }
 
 async function parseJsonSafe(res: Response): Promise<any> {
@@ -134,12 +142,18 @@ async function parseJsonSafe(res: Response): Promise<any> {
 export async function webRegister(
   fullName: string,
   email: string,
-  password: string
+  password: string,
+  turnstileToken?: string | null
 ): Promise<WebAuthResponse> {
   const res = await fetch(getApiUrl("/api/web/auth/register"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fullName, email, password }),
+    body: JSON.stringify({
+      fullName,
+      email,
+      password,
+      ...(turnstileToken ? { turnstileToken } : {}),
+    }),
   });
   const data = await parseJsonSafe(res);
   if (!res.ok || !data?.success) {
@@ -165,11 +179,17 @@ export async function webLogin(email: string, password: string): Promise<WebAuth
   return data;
 }
 
-export async function webForgotPassword(email: string): Promise<{ success: boolean; message: string }> {
+export async function webForgotPassword(
+  email: string,
+  turnstileToken?: string | null
+): Promise<{ success: boolean; message: string }> {
   const res = await fetch(getApiUrl("/api/web/auth/forgot-password"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({
+      email,
+      ...(turnstileToken ? { turnstileToken } : {}),
+    }),
   });
   const data = await parseJsonSafe(res);
   if (!res.ok || !data?.success) {
@@ -179,6 +199,62 @@ export async function webForgotPassword(email: string): Promise<{ success: boole
     success: true,
     message: data.message || "لینک بازیابی رمز عبور به ایمیل شما ارسال شد.",
   };
+}
+
+export async function webUpdatePassword(
+  password: string
+): Promise<{ success: boolean; message: string }> {
+  const session = getStoredWebSession();
+  if (!session?.access_token) {
+    throw new Error("توکن بازیابی یافت نشد. لطفاً دوباره روی لینک ایمیل بازیابی کلیک کنید.");
+  }
+
+  let res = await fetch(getApiUrl("/api/web/auth/update-password"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ password }),
+  });
+
+  if (res.status === 401 && session.refresh_token) {
+    const refreshed = await webRefreshSession(session.refresh_token);
+    if (refreshed?.session?.access_token) {
+      res = await fetch(getApiUrl("/api/web/auth/update-password"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${refreshed.session.access_token}`,
+        },
+        body: JSON.stringify({ password }),
+      });
+    }
+  }
+
+  const data = await parseJsonSafe(res);
+  if (!res.ok || !data?.success) {
+    throw new Error(data?.error || "تغییر رمز عبور انجام نشد. لطفاً دوباره تلاش کنید.");
+  }
+  return {
+    success: true,
+    message: data.message || "رمز عبور جدید با موفقیت ثبت شد.",
+  };
+}
+
+export async function fetchWebConfig(): Promise<{ turnstileSiteKey: string | null }> {
+  try {
+    const res = await fetch(getApiUrl("/api/web/config"), { method: "GET" });
+    const data = await parseJsonSafe(res);
+    if (res.ok && data?.success) {
+      return {
+        turnstileSiteKey: typeof data.turnstileSiteKey === "string" && data.turnstileSiteKey ? data.turnstileSiteKey : null,
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return { turnstileSiteKey: null };
 }
 
 export async function webRefreshSession(refreshToken: string): Promise<WebAuthResponse | null> {
@@ -309,6 +385,55 @@ export interface WebPaymentReceipt {
 
 const WEB_ENTITLEMENT_STORAGE_KEY = "eblaghyar_web_entitlement_token";
 const WEB_RECEIPT_STORAGE_KEY = "eblaghyar_web_last_payment_receipt";
+const WEB_LAST_PENDING_ORDER_KEY = "eblaghyar_web_last_pending_order_id";
+
+export function getLastPendingWebOrderId(): string | null {
+  try {
+    const val = localStorage.getItem(WEB_LAST_PENDING_ORDER_KEY);
+    return val && val.trim() ? val.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLastPendingWebOrderId(orderId: string | null): void {
+  try {
+    if (!orderId || !orderId.trim()) {
+      localStorage.removeItem(WEB_LAST_PENDING_ORDER_KEY);
+      return;
+    }
+    localStorage.setItem(WEB_LAST_PENDING_ORDER_KEY, orderId.trim());
+  } catch {
+    // ignore
+  }
+}
+
+export function clearLastPendingWebOrderId(): void {
+  try {
+    localStorage.removeItem(WEB_LAST_PENDING_ORDER_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function getWebAiHeaders(deviceId?: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const session = getStoredWebSession();
+  const entitlement = getStoredEntitlementToken();
+  const resolvedDeviceId =
+    deviceId || (typeof localStorage !== "undefined" ? localStorage.getItem("eblaghyar_device_id") || "" : "");
+
+  if (resolvedDeviceId) {
+    headers["x-device-id"] = resolvedDeviceId;
+  }
+  if (session?.access_token) {
+    headers["Authorization"] = `Bearer ${session.access_token}`;
+  }
+  if (entitlement) {
+    headers["x-entitlement-token"] = entitlement;
+  }
+  return headers;
+}
 
 export function getStoredEntitlementToken(): string | null {
   try {
@@ -502,6 +627,155 @@ export async function fetchWebPaymentStatus(
     return data as WebPaymentStatusResponse;
   } catch {
     return null;
+  }
+}
+
+export async function recheckWebPayment(
+  orderId: string,
+  deviceId: string
+): Promise<WebPaymentStatusResponse & { message?: string }> {
+  const performRequest = async (accessToken?: string | null) => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (deviceId) {
+      headers["x-device-id"] = deviceId;
+    }
+    if (accessToken) {
+      headers["Authorization"] = `Bearer ${accessToken}`;
+    }
+    return fetch(getApiUrl("/api/web/payment/recheck"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ order_id: orderId, deviceId }),
+    });
+  };
+
+  const session = getStoredWebSession();
+  let res = await performRequest(session?.access_token);
+  if (res.status === 401 && session?.refresh_token) {
+    const refreshed = await webRefreshSession(session.refresh_token);
+    if (refreshed?.session?.access_token) {
+      res = await performRequest(refreshed.session.access_token);
+    }
+  }
+
+  const data = await parseJsonSafe(res);
+  if (!res.ok || !data?.success) {
+    throw new Error(data?.message || data?.error || "بررسی مجدد وضعیت پرداخت انجام نشد.");
+  }
+  return data as WebPaymentStatusResponse & { message?: string };
+}
+
+export interface WebOrderItem {
+  order_id: string;
+  product: WebProductKey;
+  amount_rials: number;
+  status: "pending" | "paid" | "failed";
+  ref_id: string | null;
+  created_at: string;
+  paid_at: string | null;
+  entitlement_used: boolean;
+  entitlement_token: string | null;
+}
+
+export async function fetchWebOrders(deviceId: string, orderId?: string): Promise<WebOrderItem[]> {
+  const performRequest = async (accessToken?: string | null) => {
+    const headers: Record<string, string> = {};
+    if (deviceId) {
+      headers["x-device-id"] = deviceId;
+    }
+    if (accessToken) {
+      headers["Authorization"] = `Bearer ${accessToken}`;
+    }
+    const params = new URLSearchParams();
+    if (deviceId) params.set("deviceId", deviceId);
+    if (orderId) params.set("order_id", orderId);
+    const queryStr = params.toString();
+    return fetch(getApiUrl(`/api/web/orders${queryStr ? `?${queryStr}` : ""}`), {
+      method: "GET",
+      headers,
+    });
+  };
+
+  const session = getStoredWebSession();
+  let res = await performRequest(session?.access_token);
+  if (res.status === 401 && session?.refresh_token) {
+    const refreshed = await webRefreshSession(session.refresh_token);
+    if (refreshed?.session?.access_token) {
+      res = await performRequest(refreshed.session.access_token);
+    }
+  }
+
+  const data = await parseJsonSafe(res);
+  if (!res.ok || !data?.success) {
+    throw new Error(data?.error || "دریافت فهرست سفارش‌ها با خطا مواجه شد.");
+  }
+  return Array.isArray(data.orders) ? (data.orders as WebOrderItem[]) : [];
+}
+
+export interface WebSavedAnalysisRow {
+  id: string;
+  file_name: string;
+  title: string;
+  summary: string;
+  authority: string;
+  urgency: "high" | "medium" | "low";
+  analysis_json: any;
+  created_at: string;
+}
+
+export async function fetchWebAnalyses(): Promise<WebSavedAnalysisRow[] | null> {
+  const session = getStoredWebSession();
+  if (!session?.access_token) return null;
+
+  try {
+    let res = await fetch(getApiUrl("/api/web/analyses"), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.status === 401 && session.refresh_token) {
+      const refreshed = await webRefreshSession(session.refresh_token);
+      if (refreshed?.session?.access_token) {
+        res = await fetch(getApiUrl("/api/web/analyses"), {
+          method: "GET",
+          headers: { Authorization: `Bearer ${refreshed.session.access_token}` },
+        });
+      }
+    }
+    const data = await parseJsonSafe(res);
+    if (!res.ok || !data?.success || !Array.isArray(data.analyses)) {
+      return null;
+    }
+    return data.analyses as WebSavedAnalysisRow[];
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteWebAnalysis(id: string): Promise<void> {
+  const session = getStoredWebSession();
+  if (!session?.access_token || !id) return;
+  try {
+    await fetch(getApiUrl(`/api/web/analyses/${encodeURIComponent(id)}`), {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+  } catch {
+    // ignore
+  }
+}
+
+export async function clearWebAnalyses(): Promise<void> {
+  const session = getStoredWebSession();
+  if (!session?.access_token) return;
+  try {
+    await fetch(getApiUrl("/api/web/analyses"), {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+  } catch {
+    // ignore
   }
 }
 

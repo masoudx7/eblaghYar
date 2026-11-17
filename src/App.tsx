@@ -12,7 +12,8 @@ import { PrivacyNoticeModal } from "./components/PrivacyNoticeModal";
 import { DefenseDraftModal } from "./components/DefenseDraftModal";
 import { CoinPurchaseModal } from "./components/CoinPurchaseModal";
 import { WebPaywallModal } from "./components/WebPaywallModal";
-import { AuthModal } from "./components/AuthModal";
+import { AuthModal, AuthTab } from "./components/AuthModal";
+import { WebOrdersModal } from "./components/WebOrdersModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
@@ -23,6 +24,7 @@ import {
   WebUserProfile,
   WebProductKey,
   WebPaymentReceipt,
+  WebPaymentStatusResponse,
   webFetchMe,
   webLogout,
   webRefreshSession,
@@ -36,8 +38,14 @@ import {
   consumeWebAuthRedirectParams,
   consumeWebPaymentRedirectParams,
   fetchWebPaymentStatus,
+  recheckWebPayment,
+  getLastPendingWebOrderId,
+  clearLastPendingWebOrderId,
+  fetchWebAnalyses,
+  deleteWebAnalysis,
+  clearWebAnalyses,
 } from "./services/webAuth";
-import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X, CheckCircle2, ReceiptText } from "lucide-react";
+import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X, CheckCircle2, ReceiptText, Loader2 } from "lucide-react";
 
 const HISTORY_STORAGE_KEY = "judicial_notice_analysis_history";
 const DEVICE_ID_KEY = "eblaghyar_device_id";
@@ -60,8 +68,14 @@ export default function App() {
   const [isWebPaywallOpen, setIsWebPaywallOpen] = useState<boolean>(false);
   const [webUser, setWebUser] = useState<WebUserProfile | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authModalTab, setAuthModalTab] = useState<AuthTab>("login");
+  const [isWebOrdersOpen, setIsWebOrdersOpen] = useState<boolean>(false);
   const [webAuthNotice, setWebAuthNotice] = useState<string | null>(null);
   const [pendingPaymentOrderId, setPendingPaymentOrderId] = useState<string | null>(null);
+  const [failedOrderId, setFailedOrderId] = useState<string | null>(null);
+  const [isRecheckingPayment, setIsRecheckingPayment] = useState<boolean>(false);
+  const [recheckErrorNotice, setRecheckErrorNotice] = useState<string | null>(null);
+  const [isSampleAnalysis, setIsSampleAnalysis] = useState<boolean>(false);
   const [hasSingleEntitlement, setHasSingleEntitlement] = useState<boolean>(
     () => !Capacitor.isNativePlatform() && Boolean(getStoredEntitlementToken())
   );
@@ -78,15 +92,47 @@ export default function App() {
     setWebUser(profile);
   };
 
+  const applyVerifiedWebPayment = async (statusRes: WebPaymentStatusResponse) => {
+    if (statusRes.status !== "paid") return;
+    clearLastPendingWebOrderId();
+
+    const receipt: WebPaymentReceipt = {
+      order_id: statusRes.order_id,
+      product: statusRes.product,
+      ref_id: statusRes.ref_id || null,
+      paid_at: statusRes.paid_at || null,
+    };
+    saveWebPaymentReceipt(receipt);
+    setWebPaymentReceipt(receipt);
+    setWebPaymentFailed(false);
+    setFailedOrderId(null);
+    setRecheckErrorNotice(null);
+    setShowPremiumPrompt(false);
+    setIsWebPaywallOpen(false);
+
+    if (statusRes.product === "single" && statusRes.entitlement_token && !statusRes.entitlement_used) {
+      saveEntitlementToken(statusRes.entitlement_token);
+      setHasSingleEntitlement(true);
+      setCurrentAnalysis(null);
+    } else if (statusRes.product === "pack_10" || statusRes.product === "annual") {
+      await refreshWebUser();
+    }
+  };
+
   useEffect(() => {
     if (Capacitor.isNativePlatform()) return;
-    const { authNotice } = consumeWebAuthRedirectParams();
+    const { authNotice, isRecoveryMode } = consumeWebAuthRedirectParams();
     if (authNotice) {
       setWebAuthNotice(authNotice);
+    }
+    if (isRecoveryMode) {
+      setAuthModalTab("recovery");
+      setIsAuthModalOpen(true);
     }
     const { paymentStatus, orderId } = consumeWebPaymentRedirectParams();
     if (paymentStatus === "failed") {
       setWebPaymentFailed(true);
+      setFailedOrderId(orderId || getLastPendingWebOrderId());
     } else if (paymentStatus === "success" && orderId) {
       setPendingPaymentOrderId(orderId);
     }
@@ -106,38 +152,45 @@ export default function App() {
       if (!statusRes) return;
       if (statusRes.status === "failed") {
         setWebPaymentFailed(true);
+        setFailedOrderId(statusRes.order_id || getLastPendingWebOrderId());
         return;
       }
       if (statusRes.status !== "paid") return;
-
-      const receipt: WebPaymentReceipt = {
-        order_id: statusRes.order_id,
-        product: statusRes.product,
-        ref_id: statusRes.ref_id || null,
-        paid_at: statusRes.paid_at || null,
-      };
-      saveWebPaymentReceipt(receipt);
-      setWebPaymentReceipt(receipt);
-      setWebPaymentFailed(false);
-      setShowPremiumPrompt(false);
-      setIsWebPaywallOpen(false);
-
-      if (statusRes.product === "single" && statusRes.entitlement_token && !statusRes.entitlement_used) {
-        saveEntitlementToken(statusRes.entitlement_token);
-        setHasSingleEntitlement(true);
-        setCurrentAnalysis(null);
-      } else if (statusRes.product === "pack_10" || statusRes.product === "annual") {
-        await refreshWebUser();
-      }
+      await applyVerifiedWebPayment(statusRes);
     });
     return () => {
       cancelled = true;
     };
   }, [pendingPaymentOrderId, deviceId]);
 
+  const handleRecheckFailedPayment = async () => {
+    const targetOrderId = failedOrderId || getLastPendingWebOrderId();
+    if (!targetOrderId || isRecheckingPayment) return;
+    setIsRecheckingPayment(true);
+    setRecheckErrorNotice(null);
+    try {
+      const res = await recheckWebPayment(targetOrderId, deviceId);
+      if (res.status === "paid") {
+        await applyVerifiedWebPayment(res);
+      } else {
+        setRecheckErrorNotice(res.message || "پرداخت هنوز از سوی درگاه بانکی تأیید نشده است.");
+      }
+    } catch (err: any) {
+      setRecheckErrorNotice(err?.message || "امکان بررسی مجدد در این لحظه وجود نداشت.");
+    } finally {
+      setIsRecheckingPayment(false);
+    }
+  };
+
   const handleWebLogout = async () => {
     await webLogout();
     setWebUser(null);
+    try {
+      const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
+      setHistory(saved ? JSON.parse(saved) : []);
+    } catch {
+      setHistory([]);
+    }
   };
 
   const fetchDeviceStatus = async (devId: string, fp?: string) => {
@@ -274,7 +327,7 @@ export default function App() {
     }
   }, [isHistoryOpen, isPrivacyOpen, isDefenseDraftOpen, currentAnalysis]);
 
-  // 2. Load analysis history on mount
+  // 2. Load analysis history on mount & sync server-side Web history when logged in
   useEffect(() => {
     try {
       const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
@@ -286,6 +339,32 @@ export default function App() {
     }
   }, []);
 
+  const syncServerWebHistory = async () => {
+    if (Capacitor.isNativePlatform() || !webUser) return;
+    const rows = await fetchWebAnalyses();
+    if (!rows) return;
+    const mapped: AnalysisHistoryItem[] = rows.map((row) => ({
+      id: row.id,
+      date: new Date(row.created_at).toLocaleDateString("fa-IR", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      }),
+      fileName: row.file_name,
+      summary: row.summary,
+      authority: row.authority,
+      urgency: row.urgency,
+      analysis: row.analysis_json,
+    }));
+    setHistory(mapped);
+  };
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() && webUser?.id) {
+      syncServerWebHistory();
+    }
+  }, [webUser?.id]);
+
   // 3. Handle scroll to top visibility
   useEffect(() => {
     const handleScroll = () => {
@@ -295,9 +374,9 @@ export default function App() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const saveToHistory = (analysis: JudicialNoticeAnalysis, fileName: string) => {
+  const saveToHistory = (analysis: JudicialNoticeAnalysis, fileName: string, overrideId?: string) => {
     const newItem: AnalysisHistoryItem = {
-      id: Date.now().toString(),
+      id: overrideId || Date.now().toString(),
       date: new Date().toLocaleDateString("fa-IR", {
         year: "numeric",
         month: "long",
@@ -363,7 +442,7 @@ export default function App() {
           return fetch(getApiUrl("/api/web/analyze"), {
             method: "POST",
             headers,
-            body: JSON.stringify({ fileBase64, mimeType, rawText }),
+            body: JSON.stringify({ fileBase64, mimeType, rawText, fileName }),
           });
         };
 
@@ -381,7 +460,8 @@ export default function App() {
         const json = await res.json().catch(() => null);
 
         if (res.status === 402) {
-          if (entitlementToken) {
+          // توکن تحلیل تکی فقط در پاسخ صریح ENTITLEMENT_CONSUMED پاک می‌شود (نه خطاهای موقت/شبکه یا PAYMENT_REQUIRED)
+          if (json?.error === "ENTITLEMENT_CONSUMED" && entitlementToken) {
             clearEntitlementToken();
             setHasSingleEntitlement(false);
           }
@@ -411,10 +491,14 @@ export default function App() {
         }
 
         const analysisData: JudicialNoticeAnalysis = json.data;
+        setIsSampleAnalysis(false);
         setCurrentAnalysis(analysisData);
-        saveToHistory(analysisData, fileName);
+        saveToHistory(analysisData, fileName, json.savedAnalysisId);
         setLastAnalyzePayload(null);
         await refreshWebUser();
+        if (webUser) {
+          await syncServerWebHistory();
+        }
 
         window.scrollTo({ top: 0, behavior: "smooth" });
         return;
@@ -489,6 +573,7 @@ export default function App() {
   const handleSelectSample = (sample: SampleNotice) => {
     setError(null);
     setShowPremiumPrompt(false);
+    setIsSampleAnalysis(true);
     setCurrentFileName(sample.name);
     setCurrentAnalysis(sample.precomputedAnalysis);
     saveToHistory(sample.precomputedAnalysis, sample.name);
@@ -496,6 +581,7 @@ export default function App() {
   };
 
   const handleReset = () => {
+    setIsSampleAnalysis(false);
     setCurrentAnalysis(null);
     setCurrentFileName("");
     setError(null);
@@ -504,6 +590,7 @@ export default function App() {
   };
 
   const handleSelectHistoryItem = (item: AnalysisHistoryItem) => {
+    setIsSampleAnalysis(false);
     setCurrentAnalysis(item.analysis);
     setCurrentFileName(item.fileName);
     setShowPremiumPrompt(false);
@@ -512,7 +599,7 @@ export default function App() {
 
   const handleClearHistory = () => {
     const confirmed = window.confirm(
-      "آیا مطمئن هستید که می‌خواهید تمام تاریخچه تحلیل‌های خود را پاک کنید؟\n\n(توجه: موجودی سکه و اشتراک پرمیوم شما دست‌نخورده باقی خواهد ماند و این عمل فقط سوابق ذخیره‌شده روی مرورگر را پاک می‌کند.)"
+      "آیا مطمئن هستید که می‌خواهید تمام تاریخچه تحلیل‌های خود را پاک کنید؟\n\n(توجه: موجودی سکه و اشتراک پرمیوم شما دست‌نخورده باقی خواهد ماند.)"
     );
     if (confirmed) {
       setHistory([]);
@@ -520,6 +607,9 @@ export default function App() {
         localStorage.removeItem(HISTORY_STORAGE_KEY);
       } catch (e) {
         console.error(e);
+      }
+      if (!Capacitor.isNativePlatform() && webUser) {
+        clearWebAnalyses();
       }
     }
   };
@@ -532,9 +622,17 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
+    if (!Capacitor.isNativePlatform() && webUser && /^[0-9a-f-]{36}$/i.test(id)) {
+      deleteWebAnalysis(id);
+    }
   };
 
-
+  const hasWebAiAccess = Boolean(
+    (webUser && ((webUser.is_annual_active && webUser.daily_remaining > 0) || webUser.credits > 0)) ||
+      hasSingleEntitlement
+  );
+  const isWebSampleLocked = !Capacitor.isNativePlatform() && isSampleAnalysis;
+  const isWebAccessLocked = !Capacitor.isNativePlatform() && !hasWebAiAccess;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#FAF8F5] text-[#3D3B38] font-['Vazirmatn',sans-serif]">
@@ -552,9 +650,17 @@ export default function App() {
         hasSingleEntitlement={!Capacitor.isNativePlatform() ? hasSingleEntitlement : false}
         onOpenWebPaywall={!Capacitor.isNativePlatform() ? () => setIsWebPaywallOpen(true) : undefined}
         webUser={!Capacitor.isNativePlatform() ? webUser : null}
-        onOpenAuthModal={!Capacitor.isNativePlatform() ? () => setIsAuthModalOpen(true) : undefined}
+        onOpenAuthModal={
+          !Capacitor.isNativePlatform()
+            ? () => {
+                setAuthModalTab("login");
+                setIsAuthModalOpen(true);
+              }
+            : undefined
+        }
         onWebLogout={!Capacitor.isNativePlatform() ? handleWebLogout : undefined}
         onRefreshWebUser={!Capacitor.isNativePlatform() ? refreshWebUser : undefined}
+        onOpenWebOrders={!Capacitor.isNativePlatform() ? () => setIsWebOrdersOpen(true) : undefined}
       />
 
       {/* Main Container */}
@@ -659,42 +765,68 @@ export default function App() {
             </div>
           )}
 
-        {/* بنر خطای پرداخت وب (?payment=failed) + تلاش مجدد */}
+        {/* بنر خطای پرداخت وب (?payment=failed) + بررسی مجدد پرداخت + تلاش مجدد */}
         {!Capacitor.isNativePlatform() && webPaymentFailed && (
           <div
             id="web-payment-failed-banner"
-            className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in"
+            className="max-w-4xl mx-auto mb-6 p-4 sm:p-5 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-sm flex flex-col gap-3 shadow-xs animate-in fade-in"
           >
-            <div className="flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-[#8B4513] shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">پرداخت در درگاه بانکی ناموفق بود یا لغو شد</p>
-                <p className="text-xs sm:text-sm mt-0.5 text-[#6B3410]">
-                  هیچ خریدی نهایی نشده است. در صورت کسر وجه از حساب بانکی، مبلغ طی ۷۲ ساعت به حساب شما بازمی‌گردد. می‌توانید مجدداً اقدام کنید.
-                </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-[#8B4513] shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">پرداخت در درگاه بانکی ناموفق بود یا هنوز تأیید نشده است</p>
+                  <p className="text-xs sm:text-sm mt-0.5 text-[#6B3410]">
+                    در صورت کسر وجه از حساب بانکی، می‌توانید پس از ۶۰ ثانیه دکمه «بررسی مجدد پرداخت» را بزنید یا مجدداً اقدام نمایید.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {(failedOrderId || getLastPendingWebOrderId()) && (
+                  <button
+                    id="btn-recheck-web-payment"
+                    type="button"
+                    disabled={isRecheckingPayment}
+                    onClick={handleRecheckFailedPayment}
+                    className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#8F7732] hover:bg-[#776326] disabled:bg-slate-400 text-white rounded-xl font-bold text-xs transition-colors cursor-pointer shadow-xs"
+                  >
+                    {isRecheckingPayment ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCcw className="w-3.5 h-3.5" />
+                    )}
+                    <span>بررسی مجدد پرداخت</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWebPaymentFailed(false);
+                    setIsWebPaywallOpen(true);
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 bg-[#8B4513] hover:bg-[#72380F] text-white rounded-xl font-bold text-xs transition-colors cursor-pointer shadow-xs"
+                >
+                  <RefreshCcw className="w-3.5 h-3.5" />
+                  <span>تلاش مجدد</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWebPaymentFailed(false);
+                    setRecheckErrorNotice(null);
+                  }}
+                  className="p-2 rounded-xl text-[#8B4513] hover:bg-[#F2DFD8] transition-colors cursor-pointer"
+                  aria-label="بستن خطای پرداخت"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setWebPaymentFailed(false);
-                  setIsWebPaywallOpen(true);
-                }}
-                className="flex items-center justify-center gap-1.5 px-4 py-2 bg-[#8B4513] hover:bg-[#72380F] text-white rounded-xl font-bold text-xs transition-colors cursor-pointer shadow-xs"
-              >
-                <RefreshCcw className="w-3.5 h-3.5" />
-                <span>تلاش مجدد</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setWebPaymentFailed(false)}
-                className="p-2 rounded-xl text-[#8B4513] hover:bg-[#F2DFD8] transition-colors cursor-pointer"
-                aria-label="بستن خطای پرداخت"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+            {recheckErrorNotice && (
+              <p className="text-xs font-bold text-[#72380F] bg-white/70 border border-[#E9C8BC] rounded-xl px-3 py-2">
+                {recheckErrorNotice}
+              </p>
+            )}
           </div>
         )}
 
@@ -835,6 +967,9 @@ export default function App() {
             <AnalysisResult
               analysis={currentAnalysis}
               onOpenDefenseDraft={() => setIsDefenseDraftOpen(true)}
+              isWebSampleLocked={isWebSampleLocked}
+              isWebAccessLocked={isWebAccessLocked}
+              onOpenWebPaywall={() => setIsWebPaywallOpen(true)}
             />
           </div>
         )}
@@ -917,6 +1052,7 @@ export default function App() {
           onRequireAuth={(product) => {
             setPendingWebProduct(product);
             setIsWebPaywallOpen(false);
+            setAuthModalTab("login");
             setIsAuthModalOpen(true);
           }}
           autoTriggerProduct={autoTriggerWebProduct}
@@ -930,6 +1066,31 @@ export default function App() {
           isOpen={isDefenseDraftOpen}
           onClose={() => setIsDefenseDraftOpen(false)}
           analysis={currentAnalysis}
+          deviceId={deviceId}
+          isWebSampleLocked={isWebSampleLocked}
+          isWebAccessLocked={isWebAccessLocked}
+          onOpenWebPaywall={() => setIsWebPaywallOpen(true)}
+        />
+      )}
+
+      {/* Web Orders & Payment Recovery Modal */}
+      {!Capacitor.isNativePlatform() && (
+        <WebOrdersModal
+          isOpen={isWebOrdersOpen}
+          onClose={() => setIsWebOrdersOpen(false)}
+          deviceId={deviceId}
+          onPaymentRecovered={applyVerifiedWebPayment}
+          onActivateSingleToken={(token, order) => {
+            saveEntitlementToken(token);
+            setHasSingleEntitlement(true);
+            saveWebPaymentReceipt({
+              order_id: order.order_id,
+              product: order.product,
+              ref_id: order.ref_id,
+              paid_at: order.paid_at,
+            });
+            setCurrentAnalysis(null);
+          }}
         />
       )}
 
@@ -937,9 +1098,11 @@ export default function App() {
       {!Capacitor.isNativePlatform() && (
         <AuthModal
           isOpen={isAuthModalOpen}
+          initialTab={authModalTab}
           onClose={() => {
             setIsAuthModalOpen(false);
             setPendingWebProduct(null);
+            setAuthModalTab("login");
           }}
           onAuthSuccess={(user) => {
             setWebUser(user);
@@ -950,6 +1113,9 @@ export default function App() {
               setAutoTriggerWebProduct(targetProduct);
               setIsWebPaywallOpen(true);
             }
+          }}
+          onPasswordUpdated={(msg) => {
+            setWebAuthNotice(msg);
           }}
         />
       )}

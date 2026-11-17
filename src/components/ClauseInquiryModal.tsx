@@ -13,9 +13,11 @@ import {
   CheckCircle2,
   RefreshCcw,
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import ReactMarkdown from "react-markdown";
 import { JudicialNoticeAnalysis } from "../types";
 import { safeFetchJson } from "../utils/apiHelper";
+import { getWebAiHeaders } from "../services/webAuth";
 
 interface ClauseInquiryModalProps {
   isOpen: boolean;
@@ -25,6 +27,10 @@ interface ClauseInquiryModalProps {
   initialQuestion?: string;
   sectionTitle?: string;
   onSendToMainChat?: (question: string, sectionContext?: { sectionTitle: string; sectionSnippet: string }) => void;
+  deviceId?: string;
+  isWebSampleLocked?: boolean;
+  isWebAccessLocked?: boolean;
+  onOpenWebPaywall?: () => void;
 }
 
 export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
@@ -35,7 +41,12 @@ export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
   initialQuestion = "",
   sectionTitle = "بند یا عبارت خاص از ابلاغیه",
   onSendToMainChat,
+  deviceId,
+  isWebSampleLocked = false,
+  isWebAccessLocked = false,
+  onOpenWebPaywall,
 }) => {
+  const isWebLocked = !Capacitor.isNativePlatform() && (isWebSampleLocked || isWebAccessLocked);
   const [clauseText, setClauseText] = useState(initialClause);
   const [question, setQuestion] = useState(initialQuestion);
   const [isLoading, setIsLoading] = useState(false);
@@ -65,16 +76,31 @@ export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
     const finalQuestion = (customQ || question).trim();
     if (!finalQuestion) return;
 
+    if (isWebLocked) {
+      setError(
+        isWebSampleLocked
+          ? "تحلیل بند خاص در گزارش نمونه قفل است. برای بررسی ابلاغیه واقعی و استفاده از هوش مصنوعی، طرح وب تهیه کنید."
+          : "برای استفاده از تحلیل هوشمند بند در نسخه وب، تهیه اعتبار یا اشتراک فعال الزامی است."
+      );
+      if (onOpenWebPaywall) onOpenWebPaywall();
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setResponseAnswer(null);
 
     try {
+      const requestHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(!Capacitor.isNativePlatform() ? getWebAiHeaders(deviceId) : {}),
+      };
+
       const data = await safeFetchJson<{ success: boolean; answer: string; error?: string }>(
         "/api/chat",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: requestHeaders,
           body: JSON.stringify({
             messages: [],
             contextAnalysis: analysis,
@@ -94,6 +120,11 @@ export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
       setResponseAnswer(data.answer);
     } catch (err: any) {
       console.error("Clause inquiry error:", err);
+      if (!Capacitor.isNativePlatform() && (err?.status === 402 || err?.status === 403)) {
+        setError(err.message || "برای تحلیل بند با هوش مصنوعی، تهیه اعتبار یا اشتراک وب لازم است.");
+        if (onOpenWebPaywall) onOpenWebPaywall();
+        return;
+      }
       setError(err.message || "خطا در دریافت پاسخ و تحلیل حقوقی.");
     } finally {
       setIsLoading(false);
@@ -184,6 +215,28 @@ export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
             </div>
           </div>
 
+          {isWebLocked && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span>
+                {isWebSampleLocked
+                  ? "موشکافی بند خاص با هوش مصنوعی در حالت نمونه قفل است."
+                  : "برای موشکافی بند با هوش مصنوعی، خرید تحلیل یا اشتراک وب لازم است."}
+              </span>
+              {onOpenWebPaywall && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenWebPaywall();
+                  }}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-[11px] shrink-0 cursor-pointer"
+                >
+                  خرید / فعال‌سازی با پرداخت
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Custom Question Input */}
           <div className="space-y-1.5 pt-1">
             <label className="block text-xs font-bold text-[#4A4844]">
@@ -200,13 +253,14 @@ export const ClauseInquiryModal: React.FC<ClauseInquiryModalProps> = ({
                     handleAskClause();
                   }
                 }}
+                disabled={isWebLocked}
                 placeholder="سوال اختصاصی خود را بنویسید..."
-                className="flex-1 rounded-xl sm:rounded-2xl border border-[#D1CEC4] bg-white p-2.5 sm:p-3 text-xs sm:text-sm text-[#3D3B38] placeholder:text-[#A8A59D] focus:outline-hidden focus:ring-2 focus:ring-[#7A8C70]/30 focus:border-[#7A8C70]"
+                className="flex-1 rounded-xl sm:rounded-2xl border border-[#D1CEC4] bg-white p-2.5 sm:p-3 text-xs sm:text-sm text-[#3D3B38] placeholder:text-[#A8A59D] focus:outline-hidden focus:ring-2 focus:ring-[#7A8C70]/30 focus:border-[#7A8C70] disabled:opacity-60"
               />
               <button
                 type="button"
                 onClick={() => handleAskClause()}
-                disabled={isLoading || !question.trim()}
+                disabled={isLoading || !question.trim() || isWebLocked}
                 className="w-full sm:w-auto px-4 py-2 sm:py-2.5 bg-[#7A8C70] hover:bg-[#68795F] disabled:bg-[#D1CEC4] text-white rounded-xl sm:rounded-2xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs disabled:cursor-not-allowed shrink-0"
               >
                 {isLoading ? (

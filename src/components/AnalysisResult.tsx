@@ -28,12 +28,17 @@ interface AnalysisResultProps {
   analysis: JudicialNoticeAnalysis;
   onOpenDefenseDraft?: () => void;
   currentUser?: AuthUser | null;
+  isWebSampleLocked?: boolean;
+  isWebAccessLocked?: boolean;
+  onOpenWebPaywall?: () => void;
 }
 
 export const AnalysisResult: React.FC<AnalysisResultProps> = ({
   analysis,
   onOpenDefenseDraft,
-  currentUser,
+  isWebSampleLocked = false,
+  isWebAccessLocked = false,
+  onOpenWebPaywall,
 }) => {
   const [copiedDraft, setCopiedDraft] = useState(false);
   const [copiedSummary, setCopiedSummary] = useState(false);
@@ -555,16 +560,32 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
         <div className="p-3 bg-[#FAF6EC] border border-[#EBE4CF] rounded-xl sm:rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-[#8F7732]">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[#8F7732] shrink-0" />
-            <span>نیاز به تغییر استدلال‌ها، درج ایرادات شکلی یا استمهال دارید؟</span>
+            <span>
+              {isWebSampleLocked || isWebAccessLocked
+                ? "پیش‌نمایش الگوی ثابت نمایش داده می‌شود؛ تنظیم هوشمند لایحه با AI پس از خرید فعال می‌شود."
+                : "نیاز به تغییر استدلال‌ها، درج ایرادات شکلی یا استمهال دارید؟"}
+            </span>
           </div>
-          {onOpenDefenseDraft && (
-            <button
-              type="button"
-              onClick={onOpenDefenseDraft}
-              className="text-[#8F7732] hover:text-[#6E5D2A] font-bold underline underline-offset-4 cursor-pointer text-right"
-            >
-              انتخاب انواع دیگر لایحه (ایراد عدم صلاحیت، استمهال و...) ←
-            </button>
+          {isWebSampleLocked || isWebAccessLocked ? (
+            onOpenWebPaywall && (
+              <button
+                type="button"
+                onClick={onOpenWebPaywall}
+                className="text-amber-800 hover:text-amber-950 font-bold underline underline-offset-4 cursor-pointer text-right shrink-0"
+              >
+                خرید / فعال‌سازی با پرداخت ←
+              </button>
+            )
+          ) : (
+            onOpenDefenseDraft && (
+              <button
+                type="button"
+                onClick={onOpenDefenseDraft}
+                className="text-[#8F7732] hover:text-[#6E5D2A] font-bold underline underline-offset-4 cursor-pointer text-right"
+              >
+                انتخاب انواع دیگر لایحه (ایراد عدم صلاحیت، استمهال و...) ←
+              </button>
+            )
           )}
         </div>
       </div>

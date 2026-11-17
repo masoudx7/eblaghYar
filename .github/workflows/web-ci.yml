@@ -1,0 +1,34 @@
+name: Web CI
+
+on:
+  push:
+    branches: [ "web", "main" ]
+  pull_request:
+    branches: [ "web", "main" ]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck (Lint)
+        run: npm run lint
+
+      - name: Build Frontend
+        run: npm run build
+
+      - name: Run Offline Unit & Integration Tests
+        run: npm test

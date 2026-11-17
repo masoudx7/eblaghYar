@@ -52,16 +52,17 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     return masked;
   };
 
-  // Transparent client-side image compressor for high-res camera photos to stay safely within Vercel 4.5MB payload limit
-  const compressImageIfNeeded = (dataUrl: string, mimeType: string): Promise<string> => {
+  const VERCEL_SAFE_PAYLOAD_BYTES = Math.floor(4.5 * 1024 * 1024);
+
+  // Helper to resize & compress image dataUrl to stay within Vercel payload limit
+  const compressImageDataUrl = (
+    dataUrl: string,
+    maxDim: number,
+    quality: number
+  ): Promise<string> => {
     return new Promise((resolve) => {
-      if (!mimeType.startsWith("image/") || dataUrl.length < 3.2 * 1024 * 1024) {
-        resolve(dataUrl);
-        return;
-      }
       const img = new Image();
       img.onload = () => {
-        const maxDim = 2048;
         let { width, height } = img;
         if (width > maxDim || height > maxDim) {
           if (width > height) {
@@ -81,11 +82,23 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", 0.85));
+        resolve(canvas.toDataURL("image/jpeg", quality));
       };
       img.onerror = () => resolve(dataUrl);
       img.src = dataUrl;
     });
+  };
+
+  // Transparent client-side image compressor for high-res camera photos to stay safely within Vercel 4.5MB payload limit
+  const compressImageIfNeeded = async (dataUrl: string, mimeType: string): Promise<string> => {
+    if (!mimeType.startsWith("image/") || dataUrl.length < 3.2 * 1024 * 1024) {
+      return dataUrl;
+    }
+    const firstPass = await compressImageDataUrl(dataUrl, 2048, 0.85);
+    if (firstPass.length <= 4.1 * 1024 * 1024) {
+      return firstPass;
+    }
+    return compressImageDataUrl(firstPass, 1600, 0.72);
   };
 
   // Enhance image contrast via canvas for blurry or faint scanner prints
@@ -121,7 +134,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
             d[i + 2] = newVal; // B
           }
           ctx.putImageData(imgData, 0, 0);
-          resolve(canvas.toDataURL("image/jpeg", 0.92));
+          resolve(canvas.toDataURL("image/jpeg", 0.88));
         } catch {
           resolve(base64Str);
         }
@@ -134,8 +147,18 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
   const handleApplyImageEnhancement = async () => {
     if (!selectedFileBase64 || !selectedMimeType?.startsWith("image/")) return;
     setIsEnhancingImage(true);
+    setFileError(null);
     try {
-      const enhanced = await enhanceImageContrast(selectedFileBase64);
+      let enhanced = await enhanceImageContrast(selectedFileBase64);
+      if (enhanced.length > 4.1 * 1024 * 1024) {
+        enhanced = await compressImageDataUrl(enhanced, 1600, 0.72);
+      }
+      if (enhanced.length + 64 * 1024 > VERCEL_SAFE_PAYLOAD_BYTES) {
+        setFileError(
+          "حجم تصویر پس از شفاف‌سازی از سقف ۴.۵ مگابایت بیشتر شد. لطفاً تصویر با وضوح کمتر انتخاب کنید یا از متن آن استفاده نمایید."
+        );
+        return;
+      }
       setSelectedFileBase64(enhanced);
       setIsImageEnhanced(true);
     } finally {
@@ -156,16 +179,37 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     ];
 
     if (!validTypes.includes(file.type) && !file.name.endsWith(".pdf")) {
+      setSelectedFileName(null);
+      setSelectedFileBase64(null);
+      setSelectedMimeType(null);
       setFileError("لطفاً یک فایل PDF یا تصویر (JPG/PNG) بارگذاری کنید.");
       return;
     }
 
     if (file.size > 20 * 1024 * 1024) {
+      setSelectedFileName(null);
+      setSelectedFileBase64(null);
+      setSelectedMimeType(null);
       setFileError("حجم فایل نباید بیشتر از ۲۰ مگابایت باشد.");
       return;
     }
 
     const mime = file.type || (file.name.endsWith(".pdf") ? "application/pdf" : "image/jpeg");
+
+    // Pre-check PDF base64-encoded JSON body overhead (file.size * 4/3 + 64KB JSON wrapper must stay < 4.5MB)
+    if (mime === "application/pdf") {
+      const estimatedJsonPayloadBytes = Math.ceil((file.size * 4) / 3) + 64 * 1024;
+      if (estimatedJsonPayloadBytes > VERCEL_SAFE_PAYLOAD_BYTES) {
+        setSelectedFileName(null);
+        setSelectedFileBase64(null);
+        setSelectedMimeType(null);
+        setFileError(
+          "حجم فایل PDF پس از کدگذاری بیش از حد مجاز سرور (۴.۵ مگابایت، معادل حدود ۳.۲ مگابایت فایل خام) است. لطفاً فایل سبک‌تر یا اسکرین‌شات ابلاغیه را بارگذاری کنید یا متن آن را کپی نمایید."
+        );
+        return;
+      }
+    }
+
     setSelectedFileName(file.name);
     setSelectedMimeType(mime);
 
@@ -175,14 +219,26 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
       if (mime.startsWith("image/")) {
         try {
           const optimized = await compressImageIfNeeded(base64, mime);
+          if (optimized.length + 64 * 1024 > VERCEL_SAFE_PAYLOAD_BYTES) {
+            setSelectedFileName(null);
+            setSelectedFileBase64(null);
+            setSelectedMimeType(null);
+            setFileError(
+              "حجم تصویر حتی پس از فشرده‌سازی بیش از ۴.۵ مگابایت است. لطفاً تصویر با حجم کمتر انتخاب کنید."
+            );
+            return;
+          }
           setSelectedFileBase64(optimized);
         } catch {
           setSelectedFileBase64(base64);
         }
       } else {
-        if (file.size > 4.5 * 1024 * 1024) {
+        if (base64.length + 64 * 1024 > VERCEL_SAFE_PAYLOAD_BYTES) {
+          setSelectedFileName(null);
+          setSelectedFileBase64(null);
+          setSelectedMimeType(null);
           setFileError(
-            "حجم فایل PDF برای پردازش ابری بیش از ۴.۵ مگابایت است. لطفاً فایل با حجم کمتر یا تصویر صفحه‌ی اصلی ابلاغیه را بارگذاری کنید یا متن آن را در برگه «ورود مستقیم متن» قرار دهید."
+            "حجم فایل PDF پس از آماده‌سازی بیش از ۴.۵ مگابایت است. لطفاً فایل با حجم کمتر یا تصویر صفحه اصلی ابلاغیه را بارگذاری کنید."
           );
           return;
         }
@@ -190,6 +246,9 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
       }
     };
     reader.onerror = () => {
+      setSelectedFileName(null);
+      setSelectedFileBase64(null);
+      setSelectedMimeType(null);
       setFileError("خطا در خواندن فایل. لطفاً مجدداً تلاش کنید.");
     };
     reader.readAsDataURL(file);

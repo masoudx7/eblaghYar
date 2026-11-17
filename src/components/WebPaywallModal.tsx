@@ -18,6 +18,7 @@ import {
   fetchWebProducts,
   requestWebPayment,
   getStoredWebSession,
+  saveLastPendingWebOrderId,
 } from "../services/webAuth";
 
 interface WebPaywallModalProps {
@@ -92,6 +93,9 @@ export const WebPaywallModal: React.FC<WebPaywallModalProps> = ({
     setLoadingProduct(product);
     try {
       const res = await requestWebPayment(product, deviceId);
+      if (res.order_id) {
+        saveLastPendingWebOrderId(res.order_id);
+      }
       window.location.href = res.paymentUrl;
     } catch (err: any) {
       if (err?.code === "AUTH_REQUIRED") {
