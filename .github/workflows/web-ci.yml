@@ -7,7 +7,9 @@ on:
   pull_request:
     branches:
       - web
-  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: web-ci-${{ github.ref }}
@@ -16,6 +18,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -28,7 +31,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci
 
       - name: Lint (TypeScript typecheck)
         run: npm run lint
@@ -41,7 +44,7 @@ jobs:
 
       - name: Verify no server secrets leaked to client bundle
         run: |
-          if grep -rnE "GEMINI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_ANON_KEY|ZARINPAL_MERCHANT_ID|UPSTASH_REDIS_REST_TOKEN|TURNSTILE_SECRET_KEY|BAZAAR_RSA_PUBLIC_KEY|BAZAAR_DEVELOPER_API_TOKEN|MYKET_RSA_PUBLIC_KEY" src dist; then
+          if grep -rnE "GEMINI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_ANON_KEY|ZARINPAL_MERCHANT_ID|UPSTASH_REDIS_REST_TOKEN|TURNSTILE_SECRET_KEY|CRON_SECRET|RECONCILE_SECRET|BAZAAR_RSA_PUBLIC_KEY|BAZAAR_DEVELOPER_API_TOKEN|MYKET_RSA_PUBLIC_KEY" src dist; then
             echo "ERROR: Server secret identifier detected in client source or build output!"
             exit 1
           fi

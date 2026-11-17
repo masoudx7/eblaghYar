@@ -19,6 +19,7 @@ export class InMemorySupabaseStore {
     payments: [],
     web_analyses: [],
     web_usage_logs: [],
+    web_analyze_idempotency: [],
   };
 
   users = new Map<string, MockUserRecord>(); // id -> user
@@ -87,6 +88,7 @@ export class InMemorySupabaseStore {
       status: row.status,
       entitlement_token: row.entitlement_token ?? crypto.randomUUID(),
       entitlement_used: row.entitlement_used ?? false,
+      entitlement_claim_id: row.entitlement_claim_id ?? null,
       granted_at: row.granted_at ?? null,
       created_at: row.created_at || new Date().toISOString(),
       paid_at: row.paid_at ?? null,
@@ -103,6 +105,7 @@ function applyDefaults(table: string, row: any) {
     if (!copy.id) copy.id = crypto.randomUUID();
     if (!copy.entitlement_token) copy.entitlement_token = crypto.randomUUID();
     if (copy.entitlement_used === undefined) copy.entitlement_used = false;
+    if (copy.entitlement_claim_id === undefined) copy.entitlement_claim_id = null;
     if (!copy.created_at) copy.created_at = nowIso;
   } else if (table === "profiles") {
     if (copy.credits === undefined) copy.credits = 0;
@@ -183,6 +186,26 @@ class MockQueryBuilder {
     return this;
   }
 
+  gte(col: string, val: any) {
+    this.filters.push((row) => {
+      const rv = row?.[col];
+      if (rv === undefined || rv === null) return false;
+      if (typeof val === "number" && typeof rv === "number") return rv >= val;
+      return String(rv) >= String(val);
+    });
+    return this;
+  }
+
+  lt(col: string, val: any) {
+    this.filters.push((row) => {
+      const rv = row?.[col];
+      if (rv === undefined || rv === null) return false;
+      if (typeof val === "number" && typeof rv === "number") return rv < val;
+      return String(rv) < String(val);
+    });
+    return this;
+  }
+
   order(col: string, opts?: { ascending?: boolean }) {
     this.orderBy = { col, asc: opts?.ascending !== false };
     return this;
@@ -225,6 +248,12 @@ class MockQueryBuilder {
         }
         if (this.table === "devices" && raw.device_id) {
           const exists = rows.some((r) => r.device_id === raw.device_id);
+          if (exists) {
+            return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } };
+          }
+        }
+        if (this.table === "web_analyze_idempotency" && raw.idempotency_key) {
+          const exists = rows.some((r) => r.idempotency_key === raw.idempotency_key);
           if (exists) {
             return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } };
           }
@@ -418,6 +447,16 @@ export function createMockSupabaseClients(store: InMemorySupabaseStore) {
         if (!prof) return { error: { message: "Profile not found" } };
         prof.credits = Number(prof.credits || 0) + Number(args?.p_delta || 0);
         return { data: prof.credits, error: null };
+      }
+      if (fnName === "extend_profile_annual") {
+        const prof = store.tables.profiles.find((p) => p.id === args?.p_user_id);
+        if (!prof) return { error: { message: "Profile not found" } };
+        const nowMs = Date.now();
+        const existingMs = prof.annual_expires_at ? new Date(prof.annual_expires_at).getTime() : 0;
+        const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
+        const days = Number(args?.p_duration_days || 365);
+        prof.annual_expires_at = new Date(baseMs + days * 24 * 60 * 60 * 1000).toISOString();
+        return { data: prof.annual_expires_at, error: null };
       }
       return { error: { message: `Unknown RPC: ${fnName}` } };
     },

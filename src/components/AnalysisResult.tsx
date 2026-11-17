@@ -19,15 +19,19 @@ import {
   Sparkles,
   ShieldCheck,
   Bell,
+  MessageSquare,
 } from "lucide-react";
-import { JudicialNoticeAnalysis, LegalActionItem, AuthUser } from "../types";
+import { JudicialNoticeAnalysis, LegalActionItem, AuthUser, SectionQueryContext } from "../types";
 import { downloadICSFile, getGoogleCalendarLink } from "../utils/calendarExport";
 import { AttendanceReminderCard } from "./AttendanceReminderCard";
+import { LegalAssistantChat } from "./LegalAssistantChat";
+import { ClauseInquiryModal } from "./ClauseInquiryModal";
 
 interface AnalysisResultProps {
   analysis: JudicialNoticeAnalysis;
   onOpenDefenseDraft?: () => void;
   currentUser?: AuthUser | null;
+  deviceId?: string;
   isWebSampleLocked?: boolean;
   isWebAccessLocked?: boolean;
   onOpenWebPaywall?: () => void;
@@ -36,6 +40,7 @@ interface AnalysisResultProps {
 export const AnalysisResult: React.FC<AnalysisResultProps> = ({
   analysis,
   onOpenDefenseDraft,
+  deviceId,
   isWebSampleLocked = false,
   isWebAccessLocked = false,
   onOpenWebPaywall,
@@ -43,6 +48,8 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
   const [copiedDraft, setCopiedDraft] = useState(false);
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<number[]>([]);
+  const [isClauseModalOpen, setIsClauseModalOpen] = useState(false);
+  const [activeSectionContext, setActiveSectionContext] = useState<SectionQueryContext | null>(null);
 
   const handleToggleStep = (stepNumber: number) => {
     setCompletedSteps((prev) =>
@@ -129,6 +136,20 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
               <span>تنظیم پیش‌نویس لایحه دفاعیه</span>
             </button>
           )}
+
+          {/* Quick Jump to Legal Chat */}
+          <button
+            id="btn-goto-chat-top"
+            onClick={() => {
+              const el = document.getElementById("legal-chat-section");
+              el?.scrollIntoView({ behavior: "smooth" });
+            }}
+            title="پرسش جزئی از مشاور حقوقی هوش مصنوعی درباره این ابلاغیه"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold text-[#5A6D52] hover:text-[#3D4839] bg-[#F0F4EF] hover:bg-[#E2EBE0] border border-[#D5DFD0] rounded-xl transition-colors cursor-pointer"
+          >
+            <MessageSquare className="w-3.5 h-3.5 text-[#7A8C70]" />
+            <span className="truncate">مشاور حقوقی AI</span>
+          </button>
 
           {/* Quick Jump to Attendance Reminder */}
           <button
@@ -613,6 +634,38 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
       )}
 
 
+
+      {/* Interactive Legal Assistant Chat & Clause Inquiry */}
+      <LegalAssistantChat
+        analysis={analysis}
+        activeSectionContext={activeSectionContext}
+        onClearSectionContext={() => setActiveSectionContext(null)}
+        onOpenClauseInquiry={() => setIsClauseModalOpen(true)}
+        deviceId={deviceId}
+        isWebSampleLocked={isWebSampleLocked}
+        isWebAccessLocked={isWebAccessLocked}
+        onOpenWebPaywall={onOpenWebPaywall}
+      />
+
+      <ClauseInquiryModal
+        isOpen={isClauseModalOpen}
+        onClose={() => setIsClauseModalOpen(false)}
+        analysis={analysis}
+        deviceId={deviceId}
+        isWebSampleLocked={isWebSampleLocked}
+        isWebAccessLocked={isWebAccessLocked}
+        onOpenWebPaywall={onOpenWebPaywall}
+        onSendToMainChat={(question, sectionContext) => {
+          setActiveSectionContext({
+            sectionTitle: sectionContext?.sectionTitle || "بند خاص ابلاغیه",
+            sectionSnippet: sectionContext?.sectionSnippet || "",
+            suggestedPrompt: question,
+          });
+          setTimeout(() => {
+            document.getElementById("legal-chat-section")?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }}
+      />
 
       {/* Report Legal Compliance Disclaimer */}
       <div className="p-4 rounded-2xl bg-[#FBFAF7] border border-[#E5E2D9] text-xs text-[#7A7874] flex items-start gap-2.5">

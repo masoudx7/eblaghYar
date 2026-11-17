@@ -386,6 +386,42 @@ export interface WebPaymentReceipt {
 const WEB_ENTITLEMENT_STORAGE_KEY = "eblaghyar_web_entitlement_token";
 const WEB_RECEIPT_STORAGE_KEY = "eblaghyar_web_last_payment_receipt";
 const WEB_LAST_PENDING_ORDER_KEY = "eblaghyar_web_last_pending_order_id";
+const WEB_AI_TOOLS_UNTIL_KEY = "eblaghyar_web_ai_tools_until";
+
+export function getStoredWebAiToolsUntil(): string | null {
+  try {
+    const val = localStorage.getItem(WEB_AI_TOOLS_UNTIL_KEY);
+    if (!val || !val.trim()) return null;
+    const ms = new Date(val.trim()).getTime();
+    if (!Number.isFinite(ms) || ms <= Date.now()) {
+      localStorage.removeItem(WEB_AI_TOOLS_UNTIL_KEY);
+      return null;
+    }
+    return val.trim();
+  } catch {
+    return null;
+  }
+}
+
+export function saveWebAiToolsUntil(isoString: string | null): void {
+  try {
+    if (!isoString || !isoString.trim()) {
+      localStorage.removeItem(WEB_AI_TOOLS_UNTIL_KEY);
+      return;
+    }
+    localStorage.setItem(WEB_AI_TOOLS_UNTIL_KEY, isoString.trim());
+  } catch {
+    // ignore
+  }
+}
+
+export function clearWebAiToolsUntil(): void {
+  try {
+    localStorage.removeItem(WEB_AI_TOOLS_UNTIL_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export function getLastPendingWebOrderId(): string | null {
   try {
@@ -675,6 +711,7 @@ export interface WebOrderItem {
   ref_id: string | null;
   created_at: string;
   paid_at: string | null;
+  granted?: boolean;
   entitlement_used: boolean;
   entitlement_token: string | null;
 }
@@ -794,5 +831,6 @@ export async function webLogout(): Promise<void> {
     }
   } finally {
     clearWebSession();
+    clearWebAiToolsUntil();
   }
 }

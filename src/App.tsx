@@ -44,6 +44,8 @@ import {
   fetchWebAnalyses,
   deleteWebAnalysis,
   clearWebAnalyses,
+  getStoredWebAiToolsUntil,
+  saveWebAiToolsUntil,
 } from "./services/webAuth";
 import { Scale, AlertCircle, ArrowUp, RefreshCcw, Crown, Sparkles, X, CheckCircle2, ReceiptText, Loader2 } from "lucide-react";
 
@@ -85,6 +87,9 @@ export default function App() {
   const [webPaymentFailed, setWebPaymentFailed] = useState<boolean>(false);
   const [pendingWebProduct, setPendingWebProduct] = useState<WebProductKey | null>(null);
   const [autoTriggerWebProduct, setAutoTriggerWebProduct] = useState<WebProductKey | null>(null);
+  const [webAiToolsUntil, setWebAiToolsUntil] = useState<string | null>(
+    () => (!Capacitor.isNativePlatform() ? getStoredWebAiToolsUntil() : null)
+  );
 
   const refreshWebUser = async () => {
     if (Capacitor.isNativePlatform()) return;
@@ -185,6 +190,7 @@ export default function App() {
   const handleWebLogout = async () => {
     await webLogout();
     setWebUser(null);
+    setWebAiToolsUntil(null);
     try {
       const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
       setHistory(saved ? JSON.parse(saved) : []);
@@ -424,11 +430,13 @@ export default function App() {
       }
 
       if (!Capacitor.isNativePlatform()) {
-        // مسیر تحلیل نسخه وب (فقط با پرداخت / اعتبار / اشتراک)
+        // مسیر تحلیل نسخه وب (فقط با پرداخت / اعتبار / اشتراک) + Idempotency-Key یکتا برای هر تلاش
+        const attemptIdempotencyKey = uuidv4();
         const sendWebAnalyze = (accessToken?: string | null, entitlementTok?: string | null) => {
           const headers: Record<string, string> = {
             "Content-Type": "application/json",
             "x-device-id": currentDeviceId,
+            "Idempotency-Key": attemptIdempotencyKey,
           };
           if (deviceFingerprint) {
             headers["x-device-fingerprint"] = deviceFingerprint;
@@ -488,6 +496,11 @@ export default function App() {
         if (json.accessMode === "entitlement") {
           clearEntitlementToken();
           setHasSingleEntitlement(false);
+        }
+
+        if (typeof json.ai_tools_until === "string" && json.ai_tools_until) {
+          saveWebAiToolsUntil(json.ai_tools_until);
+          setWebAiToolsUntil(json.ai_tools_until);
         }
 
         const analysisData: JudicialNoticeAnalysis = json.data;
@@ -627,9 +640,13 @@ export default function App() {
     }
   };
 
+  const hasRecentWebAiToolsPass = Boolean(
+    webAiToolsUntil && new Date(webAiToolsUntil).getTime() > Date.now()
+  );
   const hasWebAiAccess = Boolean(
     (webUser && ((webUser.is_annual_active && webUser.daily_remaining > 0) || webUser.credits > 0)) ||
-      hasSingleEntitlement
+      hasSingleEntitlement ||
+      hasRecentWebAiToolsPass
   );
   const isWebSampleLocked = !Capacitor.isNativePlatform() && isSampleAnalysis;
   const isWebAccessLocked = !Capacitor.isNativePlatform() && !hasWebAiAccess;
@@ -967,6 +984,7 @@ export default function App() {
             <AnalysisResult
               analysis={currentAnalysis}
               onOpenDefenseDraft={() => setIsDefenseDraftOpen(true)}
+              deviceId={deviceId}
               isWebSampleLocked={isWebSampleLocked}
               isWebAccessLocked={isWebAccessLocked}
               onOpenWebPaywall={() => setIsWebPaywallOpen(true)}

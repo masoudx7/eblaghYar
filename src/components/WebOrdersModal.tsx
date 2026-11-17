@@ -210,7 +210,8 @@ export const WebOrdersModal: React.FC<WebOrdersModalProps> = ({
             orders.map((order) => {
               const isPaid = order.status === "paid";
               const isPending = order.status === "pending";
-              const canRecheck = !isPaid;
+              const isUngrantedPaid = isPaid && order.granted === false;
+              const canRecheck = !isPaid || isUngrantedPaid;
               const canActivateToken =
                 isPaid && order.product === "single" && !order.entitlement_used && Boolean(order.entitlement_token);
 
@@ -226,14 +227,21 @@ export const WebOrdersModal: React.FC<WebOrdersModalProps> = ({
                       </span>
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
-                          isPaid
+                          isUngrantedPaid
+                            ? "bg-amber-100 text-amber-900"
+                            : isPaid
                             ? "bg-emerald-100 text-emerald-800"
                             : isPending
                             ? "bg-amber-100 text-amber-900"
                             : "bg-[#FAF0ED] text-[#8B4513]"
                         }`}
                       >
-                        {isPaid ? (
+                        {isUngrantedPaid ? (
+                          <>
+                            <Clock className="w-3 h-3" />
+                            <span>پرداخت موفق (در انتظار اعمال سهمیه)</span>
+                          </>
+                        ) : isPaid ? (
                           <>
                             <CheckCircle2 className="w-3 h-3" />
                             <span>پرداخت موفق</span>

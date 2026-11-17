@@ -151,7 +151,7 @@ describe("Phase 3 & 5: Web Analyze Atomic Reserve/Refund, Annual Daily Quota, Au
 
     expect(aiErrRes.status).toBeGreaterThanOrEqual(500);
     expect(singleOrder.entitlement_used).toBe(false);
-    expect(store.tables.web_usage_logs.some((l) => l.action === "analyze_refund")).toBe(true);
+    expect(store.tables.web_usage_logs.some((l) => l.action === "refund")).toBe(true);
   });
 
   it("enforces 3/day Tehran quota on annual plan and returns 403 DAILY_LIMIT_REACHED on 4th request", async () => {

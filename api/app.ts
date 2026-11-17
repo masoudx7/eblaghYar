@@ -321,7 +321,7 @@ export const checkDeviceAccess = async (
     return res.status(500).json({
       success: false,
       error: "SERVER_ERROR",
-      message: err?.message || "خطای غیرمنتظره در بررسی سهمیه دستگاه.",
+      message: "خطای غیرمنتظره در بررسی سهمیه دستگاه.",
     });
   }
 };
@@ -353,21 +353,44 @@ const FALLBACK_MODELS = [
   "gemini-3.1-flash-lite",
 ];
 
+const DEFAULT_GEMINI_RETRY_BUDGET_MS = 45000;
+
 async function generateWithFallbackAndRetry(
   ai: GoogleGenAI,
   requestParams: Parameters<typeof ai.models.generateContent>[0],
   maxRetries = 4
 ) {
   let lastError: any = null;
+  const rawBudget = Number(process.env.GEMINI_RETRY_BUDGET_MS);
+  const totalBudgetMs =
+    Number.isFinite(rawBudget) && rawBudget > 0 ? rawBudget : DEFAULT_GEMINI_RETRY_BUDGET_MS;
+  const startedAt = Date.now();
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingBudgetMs = totalBudgetMs - elapsedMs;
+    if (attempt > 0 && remainingBudgetMs <= 1500) {
+      break;
+    }
+
     const modelToUse = FALLBACK_MODELS[attempt % FALLBACK_MODELS.length];
+    let attemptTimer: ReturnType<typeof setTimeout> | undefined;
 
     try {
-      const response = await ai.models.generateContent({
-        ...requestParams,
-        model: modelToUse,
-      });
+      const attemptTimeoutMs = Math.max(1000, Math.min(remainingBudgetMs, 25000));
+      const response = await Promise.race([
+        ai.models.generateContent({
+          ...requestParams,
+          model: modelToUse,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          attemptTimer = setTimeout(() => {
+            const timeoutErr: any = new Error("GEMINI_TIMEOUT");
+            timeoutErr.code = 504;
+            reject(timeoutErr);
+          }, attemptTimeoutMs);
+        }),
+      ]);
 
       if (response && response.text) {
         return response;
@@ -379,6 +402,8 @@ async function generateWithFallbackAndRetry(
       const isTransient =
         err?.status === "UNAVAILABLE" ||
         err?.code === 503 ||
+        err?.code === 504 ||
+        errMsg.includes("GEMINI_TIMEOUT") ||
         errMsg.includes("503") ||
         errMsg.includes("high demand") ||
         errMsg.includes("UNAVAILABLE") ||
@@ -389,15 +414,22 @@ async function generateWithFallbackAndRetry(
 
       console.warn(`[Gemini API] Attempt ${attempt + 1}/${maxRetries} with model ${modelToUse} failed:`, errMsg);
 
-      if (attempt < maxRetries - 1) {
+      const postElapsedMs = Date.now() - startedAt;
+      const postRemainingMs = totalBudgetMs - postElapsedMs;
+      if (attempt < maxRetries - 1 && postRemainingMs > 1800) {
         const delayMs = isTransient ? 300 + Math.floor(Math.random() * 200) : 600;
-        await sleep(delayMs);
+        await sleep(Math.min(delayMs, Math.max(0, postRemainingMs - 1500)));
         continue;
+      }
+      break;
+    } finally {
+      if (attemptTimer) {
+        clearTimeout(attemptTimer);
       }
     }
   }
 
-  throw lastError;
+  throw lastError || new Error("GEMINI_TIMEOUT");
 }
 
 function cleanAndParseJSON(raw: string): any {
@@ -463,7 +495,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-device-id, x-device-fingerprint, x-entitlement-token, X-Requested-With"
+    "Content-Type, Authorization, x-device-id, x-device-fingerprint, x-entitlement-token, Idempotency-Key, x-cron-secret, X-Requested-With"
   );
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -717,7 +749,9 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
     const errMsg = String(error?.message || "");
     const isUnavailable =
       error?.code === 503 ||
+      error?.code === 504 ||
       error?.status === "UNAVAILABLE" ||
+      errMsg.includes("GEMINI_TIMEOUT") ||
       errMsg.includes("503") ||
       errMsg.includes("high demand") ||
       errMsg.includes("UNAVAILABLE") ||
@@ -731,7 +765,7 @@ ${rawText ? `متن ارسالی کاربر:\n${rawText}` : ""}
         isTemporary: isUnavailable,
         error: isUnavailable
           ? "سرویس هوش مصنوعی در حال حاضر با ترافیک بالایی روبرو است. لطفاً چند لحظه دیگر روی دکمه «تلاش مجدد» کلیک کنید."
-          : error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+          : "خطا در پردازش و تحلیل ابلاغیه قضایی. لطفاً مجدداً تلاش کنید.",
       },
     };
   }
@@ -830,7 +864,7 @@ apiRouter.post("/analyze", requireLegacyAnalyzeEnabled, checkDeviceAccess, async
     console.error("Error analyzing notice:", error);
     return res.status(500).json({
       success: false,
-      error: error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+      error: "خطا در پردازش و تحلیل ابلاغیه قضایی",
     });
   }
 });
@@ -939,7 +973,7 @@ apiRouter.get("/device-status", requireLegacyAnalyzeEnabled, async (req, res) =>
     console.error("device-status error:", err);
     return res.status(500).json({
       success: false,
-      error: err.message || "Failed to fetch device status",
+      error: "خطای سرور در دریافت وضعیت دستگاه.",
     });
   }
 });
@@ -1296,7 +1330,7 @@ apiRouter.post("/activate-premium", requireLegacyPaymentEnabled, async (req, res
     return res.status(500).json({
       success: false,
       error: "SERVER_ERROR",
-      message: err?.message || "خطای سرور در فعال‌سازی نسخه پرمیوم.",
+      message: "خطای سرور در فعال‌سازی نسخه پرمیوم.",
     });
   }
 });
@@ -1404,7 +1438,7 @@ apiRouter.post("/buy-coins", requireLegacyPaymentEnabled, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: "SERVER_ERROR",
-      message: err?.message || "خطای سرور در خرید سکه.",
+      message: "خطای سرور در خرید سکه.",
     });
   }
 });
@@ -1532,7 +1566,7 @@ ${attachedEvidences && attachedEvidences.length > 0 ? attachedEvidences.join(" -
     console.error("Error generating draft:", error);
     return res.status(500).json({
       success: false,
-      error: error?.message || "خطا در تولید پیش‌نویس لایحه دفاعیه",
+      error: "خطا در تولید پیش‌نویس لایحه دفاعیه. لطفاً دوباره تلاش کنید.",
     });
   }
 });
@@ -1609,7 +1643,9 @@ ${sectionPromptSnippet}
     const errMsg = String(error?.message || "");
     const isUnavailable =
       error?.code === 503 ||
+      error?.code === 504 ||
       error?.status === "UNAVAILABLE" ||
+      errMsg.includes("GEMINI_TIMEOUT") ||
       errMsg.includes("503") ||
       errMsg.includes("high demand") ||
       errMsg.includes("UNAVAILABLE") ||
@@ -1620,7 +1656,7 @@ ${sectionPromptSnippet}
       isTemporary: isUnavailable,
       error: isUnavailable
         ? "سرویس هوش مصنوعی در حال حاضر با ترافیک بالایی روبرو است. لطفاً چند لحظه دیگر دوباره تلاش کنید."
-        : error?.message || "خطا در برقراری ارتباط با دستیار حقوقی",
+        : "خطا در برقراری ارتباط با دستیار حقوقی. لطفاً دوباره تلاش کنید.",
     });
   }
 });
@@ -1840,7 +1876,7 @@ apiRouter.get("/payment/zarinpal/verify", requireLegacyPaymentEnabled, async (re
     return res.redirect(`/?payment=success&added=${tokensToAdd}&premium=${makePremium}`);
   } catch (e: any) {
     console.error("Zarinpal legacy verify error:", e);
-    return res.redirect(`/?payment=error&message=${encodeURIComponent(e.message || "verify_failed")}`);
+    return res.redirect("/?payment=error&message=verify_failed");
   }
 });
 
@@ -2140,18 +2176,64 @@ async function logWebUsage(
   }
 }
 
+const AI_TOOLS_PASS_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 type WebAccessMode =
   | { kind: "annual"; userId: string; today: string; usedToday: number }
   | { kind: "credits"; userId: string }
-  | { kind: "entitlement"; paymentId: string; deviceId: string };
+  | { kind: "entitlement"; paymentId: string; deviceId: string; claimId?: string }
+  | { kind: "ai_tools_pass"; userId?: string | null; deviceId?: string | null; validUntil: string };
 
 type WebAccessResolution =
   | { ok: true; accessMode: WebAccessMode; verifiedUserId: string | null; deviceId: string }
   | { ok: false; status: number; error: string; message: string; extra?: Record<string, any> };
 
+async function findRecentPaidAnalyzePass(
+  serviceClient: SupabaseClient,
+  verifiedUserId: string | null,
+  deviceId: string
+): Promise<string | null> {
+  const cutoffIso = new Date(Date.now() - AI_TOOLS_PASS_WINDOW_MS).toISOString();
+
+  if (verifiedUserId) {
+    const { data: rows } = await serviceClient
+      .from("web_usage_logs")
+      .select("created_at")
+      .eq("user_id", verifiedUserId)
+      .eq("action", "analyze")
+      .gte("created_at", cutoffIso)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (row?.created_at) {
+      return new Date(new Date(row.created_at).getTime() + AI_TOOLS_PASS_WINDOW_MS).toISOString();
+    }
+  }
+
+  if (deviceId && DEVICE_ID_REGEX.test(deviceId)) {
+    const { data: rows } = await serviceClient
+      .from("web_usage_logs")
+      .select("created_at")
+      .eq("device_id", deviceId)
+      .eq("action", "analyze")
+      .gte("created_at", cutoffIso)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (row?.created_at) {
+      return new Date(new Date(row.created_at).getTime() + AI_TOOLS_PASS_WINDOW_MS).toISOString();
+    }
+  }
+
+  return null;
+}
+
 async function resolveWebAccessForRequest(
   req: express.Request,
-  serviceClient: SupabaseClient
+  serviceClient: SupabaseClient,
+  options?: { allowRecentAnalyzePass?: boolean }
 ): Promise<WebAccessResolution> {
   const rawDeviceId = req.headers["x-device-id"] ?? req.body?.deviceId;
   const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
@@ -2242,6 +2324,18 @@ async function resolveWebAccessForRequest(
     }
   }
 
+  if (!accessMode && options?.allowRecentAnalyzePass) {
+    const validUntil = await findRecentPaidAnalyzePass(serviceClient, verifiedUserId, deviceId);
+    if (validUntil) {
+      accessMode = {
+        kind: "ai_tools_pass",
+        userId: verifiedUserId,
+        deviceId: deviceId || null,
+        validUntil,
+      };
+    }
+  }
+
   if (accessMode) {
     return { ok: true, accessMode, verifiedUserId, deviceId };
   }
@@ -2297,7 +2391,9 @@ async function webAiAccessMiddleware(
         });
       }
 
-      const access = await resolveWebAccessForRequest(req, serviceClient);
+      const access = await resolveWebAccessForRequest(req, serviceClient, {
+        allowRecentAnalyzePass: true,
+      });
       if ("error" in access) {
         return res.status(access.status).json({
           success: false,
@@ -2960,26 +3056,46 @@ async function grantWebPaymentEntitlement(
         }
       }
     } else if (payment.product === "annual") {
-      const { data: prof } = await serviceClient
-        .from("profiles")
-        .select("annual_expires_at")
-        .eq("id", userId)
-        .maybeSingle();
+      const durationDays = WEB_PRODUCTS.annual.durationDays;
+      const { error: rpcErr } = await serviceClient.rpc("extend_profile_annual", {
+        p_user_id: userId,
+        p_duration_days: durationDays,
+      });
 
-      const nowMs = Date.now();
-      const existingMs = prof?.annual_expires_at ? new Date(prof.annual_expires_at).getTime() : 0;
-      const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
-      const newExpiresAt = new Date(
-        baseMs + WEB_PRODUCTS.annual.durationDays * 24 * 60 * 60 * 1000
-      ).toISOString();
+      if (rpcErr) {
+        let casSuccess = false;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const { data: prof } = await serviceClient
+            .from("profiles")
+            .select("annual_expires_at")
+            .eq("id", userId)
+            .maybeSingle();
 
-      const { error: updateErr } = await serviceClient
-        .from("profiles")
-        .update({ annual_expires_at: newExpiresAt })
-        .eq("id", userId);
+          const nowMs = Date.now();
+          const existingIso: string | null = prof?.annual_expires_at || null;
+          const existingMs = existingIso ? new Date(existingIso).getTime() : 0;
+          const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
+          const newExpiresAt = new Date(
+            baseMs + durationDays * 24 * 60 * 60 * 1000
+          ).toISOString();
 
-      if (updateErr) {
-        throw new Error("خطا در ثبت اشتراک یک‌ساله در پروفایل.");
+          let updateQuery = serviceClient
+            .from("profiles")
+            .update({ annual_expires_at: newExpiresAt })
+            .eq("id", userId);
+          updateQuery = existingIso
+            ? updateQuery.eq("annual_expires_at", existingIso)
+            : updateQuery.is("annual_expires_at", null);
+
+          const { data: updated } = await updateQuery.select("id").maybeSingle();
+          if (updated) {
+            casSuccess = true;
+            break;
+          }
+        }
+        if (!casSuccess) {
+          throw new Error("خطا در ثبت اشتراک یک‌ساله در پروفایل.");
+        }
       }
     }
 
@@ -3671,7 +3787,7 @@ apiRouter.get("/web/orders", async (req, res) => {
       }
       const { data: row } = await serviceClient
         .from("payments")
-        .select("id, user_id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+        .select("id, user_id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at, granted_at")
         .eq("id", orderId)
         .maybeSingle();
 
@@ -3695,6 +3811,7 @@ apiRouter.get("/web/orders", async (req, res) => {
             ref_id: row.ref_id || null,
             created_at: row.created_at,
             paid_at: row.paid_at || null,
+            granted: Boolean(row.granted_at),
             entitlement_used: Boolean(row.entitlement_used),
             entitlement_token:
               row.product === "single" &&
@@ -3712,7 +3829,7 @@ apiRouter.get("/web/orders", async (req, res) => {
       if (deviceId && DEVICE_ID_REGEX.test(deviceId)) {
         const { data: guestRows } = await serviceClient
           .from("payments")
-          .select("id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+          .select("id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at, granted_at")
           .eq("device_id", deviceId)
           .order("created_at", { ascending: false })
           .limit(15);
@@ -3727,6 +3844,7 @@ apiRouter.get("/web/orders", async (req, res) => {
             ref_id: row.ref_id || null,
             created_at: row.created_at,
             paid_at: row.paid_at || null,
+            granted: Boolean(row.granted_at),
             entitlement_used: Boolean(row.entitlement_used),
             entitlement_token:
               row.product === "single" && row.status === "paid" && !row.entitlement_used
@@ -3744,7 +3862,7 @@ apiRouter.get("/web/orders", async (req, res) => {
 
     const { data: rows, error: listErr } = await serviceClient
       .from("payments")
-      .select("id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at")
+      .select("id, device_id, product, amount_rials, status, ref_id, entitlement_token, entitlement_used, created_at, paid_at, granted_at")
       .eq("user_id", callerUserId)
       .order("created_at", { ascending: false })
       .limit(30);
@@ -3763,6 +3881,7 @@ apiRouter.get("/web/orders", async (req, res) => {
         ref_id: row.ref_id || null,
         created_at: row.created_at,
         paid_at: row.paid_at || null,
+        granted: Boolean(row.granted_at),
         entitlement_used: Boolean(row.entitlement_used),
         entitlement_token:
           row.product === "single" &&
@@ -3973,26 +4092,37 @@ async function reserveWebAccessUnit(
     };
   }
 
-  const { data: claimedPayment } = await serviceClient
-    .from("payments")
-    .update({ entitlement_used: true })
-    .eq("id", accessMode.paymentId)
-    .eq("entitlement_used", false)
-    .eq("status", "paid")
-    .eq("device_id", accessMode.deviceId)
-    .select("id")
-    .maybeSingle();
+  if (accessMode.kind === "entitlement") {
+    const claimId = crypto.randomUUID();
+    const { data: claimedPayment } = await serviceClient
+      .from("payments")
+      .update({ entitlement_used: true, entitlement_claim_id: claimId })
+      .eq("id", accessMode.paymentId)
+      .eq("entitlement_used", false)
+      .eq("status", "paid")
+      .eq("device_id", accessMode.deviceId)
+      .select("id, entitlement_claim_id")
+      .maybeSingle();
 
-  if (!claimedPayment) {
-    return {
-      ok: false,
-      status: 402,
-      error: "ENTITLEMENT_CONSUMED",
-      message: "توکن تحلیل تکی قبلاً مصرف شده یا معتبر نیست.",
-    };
+    if (!claimedPayment) {
+      return {
+        ok: false,
+        status: 402,
+        error: "ENTITLEMENT_CONSUMED",
+        message: "توکن تحلیل تکی قبلاً مصرف شده یا معتبر نیست.",
+      };
+    }
+
+    accessMode.claimId = claimedPayment.entitlement_claim_id || claimId;
+    return { ok: true };
   }
 
-  return { ok: true };
+  return {
+    ok: false,
+    status: 402,
+    error: "PAYMENT_REQUIRED",
+    message: "دسترسی معتبر برای تحلیل یافت نشد.",
+  };
 }
 
 async function refundWebAccessUnit(serviceClient: SupabaseClient, accessMode: WebAccessMode): Promise<void> {
@@ -4052,20 +4182,49 @@ async function refundWebAccessUnit(serviceClient: SupabaseClient, accessMode: We
     }
 
     if (accessMode.kind === "entitlement") {
-      await serviceClient
+      let updateQuery = serviceClient
         .from("payments")
-        .update({ entitlement_used: false })
+        .update({ entitlement_used: false, entitlement_claim_id: null })
         .eq("id", accessMode.paymentId)
         .eq("entitlement_used", true);
+
+      if (accessMode.claimId) {
+        updateQuery = updateQuery.eq("entitlement_claim_id", accessMode.claimId);
+      }
+
+      await updateQuery;
     }
   } catch (refundErr) {
     console.error("[Web Analyze Refund Error]:", refundErr);
   }
 }
 
+async function resolveOwnerKeyForAnalyzeIdempotency(req: express.Request): Promise<string> {
+  const bearerToken = extractBearerToken(req);
+  if (bearerToken) {
+    const authClient = getSupabaseAuthClient();
+    if (authClient) {
+      const { data: userData, error: userErr } = await authClient.auth.getUser(bearerToken);
+      if (!userErr && userData?.user) {
+        return `user:${userData.user.id}`;
+      }
+    }
+  }
+  const rawDeviceId = req.headers["x-device-id"] ?? req.body?.deviceId;
+  const deviceId = (Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId)?.toString().trim() || "";
+  if (deviceId) {
+    return `device:${deviceId}`;
+  }
+  return "anonymous";
+}
+
 apiRouter.post("/web/analyze", async (req, res) => {
   const serviceClient = getSupabaseClient();
   let reservedAccess: WebAccessMode | null = null;
+  let activeReserveId: string | null = null;
+  let activeUserId: string | null = null;
+  let activeDeviceId = "";
+  let activeIdempotencyKey: string | null = null;
 
   try {
     if (!serviceClient) {
@@ -4075,7 +4234,52 @@ apiRouter.post("/web/analyze", async (req, res) => {
       });
     }
 
-    const access = await resolveWebAccessForRequest(req, serviceClient);
+    // بررسی هدر Idempotency-Key پیش از رزرو سهمیه تا تکرار شبکه دوبار سهمیه کسر نکند
+    const rawIdemKey = req.headers["idempotency-key"] ?? req.body?.idempotencyKey;
+    const idempotencyKey =
+      (Array.isArray(rawIdemKey) ? rawIdemKey[0] : rawIdemKey)?.toString().trim() || "";
+    if (idempotencyKey) {
+      if (!UUID_REGEX.test(idempotencyKey)) {
+        return res.status(400).json({
+          success: false,
+          error: "INVALID_IDEMPOTENCY_KEY",
+          message: "شناسه تکرار درخواست (Idempotency-Key) معتبر نیست.",
+        });
+      }
+
+      const ownerKey = await resolveOwnerKeyForAnalyzeIdempotency(req);
+      const { data: existingIdem } = await serviceClient
+        .from("web_analyze_idempotency")
+        .select("*")
+        .eq("idempotency_key", idempotencyKey)
+        .maybeSingle();
+
+      if (existingIdem) {
+        if (existingIdem.owner_key !== ownerKey) {
+          return res.status(409).json({
+            success: false,
+            error: "IDEMPOTENCY_KEY_CONFLICT",
+            message: "این شناسه درخواست متعلق به نشست یا کاربر دیگری است.",
+          });
+        }
+        if (existingIdem.status === "completed" && existingIdem.response_body) {
+          return res.status(existingIdem.response_status || 200).json(existingIdem.response_body);
+        }
+        const createdMs = existingIdem.created_at ? new Date(existingIdem.created_at).getTime() : 0;
+        if (existingIdem.status === "in_progress" && Date.now() - createdMs < 120_000) {
+          return res.status(409).json({
+            success: false,
+            error: "REQUEST_IN_PROGRESS",
+            message: "درخواست تحلیل با همین شناسه هم‌اکنون در حال پردازش است. لطفاً چند لحظه صبر کنید.",
+          });
+        }
+      }
+      activeIdempotencyKey = idempotencyKey;
+    }
+
+    const access = await resolveWebAccessForRequest(req, serviceClient, {
+      allowRecentAnalyzePass: false,
+    });
     if ("error" in access) {
       return res.status(access.status).json({
         success: false,
@@ -4084,6 +4288,9 @@ apiRouter.post("/web/analyze", async (req, res) => {
         ...(access.extra || {}),
       });
     }
+
+    activeUserId = access.verifiedUserId;
+    activeDeviceId = access.deviceId;
 
     // اعتبارسنجی ورودی تحلیل پیش از رزرو سهمیه و فراخوانی Gemini
     const { fileBase64, mimeType, rawText, fileName } = req.body || {};
@@ -4119,9 +4326,70 @@ apiRouter.post("/web/analyze", async (req, res) => {
       }
     }
 
+    // قفل idempotency پس از اعتبارسنجی دسترسی و ورودی
+    if (activeIdempotencyKey) {
+      const ownerKey = access.verifiedUserId
+        ? `user:${access.verifiedUserId}`
+        : access.deviceId
+        ? `device:${access.deviceId}`
+        : "anonymous";
+      const nowIso = new Date().toISOString();
+      const expiresIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+      await serviceClient
+        .from("web_analyze_idempotency")
+        .delete()
+        .eq("idempotency_key", activeIdempotencyKey)
+        .eq("owner_key", ownerKey)
+        .eq("status", "failed");
+
+      const { error: idemInsertErr } = await serviceClient
+        .from("web_analyze_idempotency")
+        .insert({
+          idempotency_key: activeIdempotencyKey,
+          owner_key: ownerKey,
+          status: "in_progress",
+          created_at: nowIso,
+          expires_at: expiresIso,
+        });
+
+      if (idemInsertErr) {
+        const { data: raceRow } = await serviceClient
+          .from("web_analyze_idempotency")
+          .select("*")
+          .eq("idempotency_key", activeIdempotencyKey)
+          .maybeSingle();
+
+        if (raceRow && raceRow.owner_key === ownerKey && raceRow.status === "completed" && raceRow.response_body) {
+          return res.status(raceRow.response_status || 200).json(raceRow.response_body);
+        }
+        if (raceRow && raceRow.owner_key === ownerKey) {
+          return res.status(409).json({
+            success: false,
+            error: "REQUEST_IN_PROGRESS",
+            message: "درخواست تحلیل با همین شناسه هم‌اکنون در حال پردازش است. لطفاً چند لحظه صبر کنید.",
+          });
+        }
+      }
+    }
+
     // ۱) رزرو اتمیک سهمیه پیش از اجرای Gemini (جلوگیری از Race Condition همزمان روی ۱ اعتبار/توکن)
     const reservation = await reserveWebAccessUnit(serviceClient, access.accessMode);
     if ("error" in reservation) {
+      if (activeIdempotencyKey) {
+        await serviceClient
+          .from("web_analyze_idempotency")
+          .update({
+            status: "failed",
+            response_status: reservation.status,
+            response_body: {
+              success: false,
+              error: reservation.error,
+              message: reservation.message,
+            },
+          })
+          .eq("idempotency_key", activeIdempotencyKey);
+      }
       return res.status(reservation.status).json({
         success: false,
         error: reservation.error,
@@ -4129,6 +4397,22 @@ apiRouter.post("/web/analyze", async (req, res) => {
       });
     }
     reservedAccess = access.accessMode;
+    activeReserveId = crypto.randomUUID();
+
+    await logWebUsage(serviceClient, {
+      userId: access.verifiedUserId,
+      deviceId: access.deviceId,
+      paymentId: reservedAccess.kind === "entitlement" ? reservedAccess.paymentId : null,
+      action: "reserve",
+      accessMode: reservedAccess.kind,
+      metadata: {
+        reserve_id: activeReserveId,
+        ...(reservedAccess.kind === "annual" ? { today: reservedAccess.today } : {}),
+        ...(reservedAccess.kind === "entitlement" && reservedAccess.claimId
+          ? { claim_id: reservedAccess.claimId }
+          : {}),
+      },
+    });
 
     // ۲) اجرای تحلیل با تابع مشترک runAnalysis
     const analysisResult = await runAnalysis({ fileBase64, mimeType, rawText });
@@ -4139,12 +4423,29 @@ apiRouter.post("/web/analyze", async (req, res) => {
         userId: access.verifiedUserId,
         deviceId: access.deviceId,
         paymentId: reservedAccess.kind === "entitlement" ? reservedAccess.paymentId : null,
-        action: "analyze_refund",
+        action: "refund",
         accessMode: reservedAccess.kind,
-        metadata: { reason: analysisResult.body?.error || "analysis_failed" },
+        metadata: {
+          reserve_id: activeReserveId,
+          reason: analysisResult.body?.error || "analysis_failed",
+        },
       });
       reservedAccess = null;
-      return res.status(analysisResult.status || 500).json(analysisResult.body || { success: false });
+
+      const errStatus = analysisResult.status || 500;
+      const errBody = analysisResult.body || { success: false };
+      if (activeIdempotencyKey) {
+        await serviceClient
+          .from("web_analyze_idempotency")
+          .update({
+            status: "failed",
+            response_status: errStatus,
+            response_body: errBody,
+          })
+          .eq("idempotency_key", activeIdempotencyKey);
+      }
+
+      return res.status(errStatus).json(errBody);
     }
 
     reservedAccess = null;
@@ -4184,25 +4485,257 @@ apiRouter.post("/web/analyze", async (req, res) => {
       paymentId: access.accessMode.kind === "entitlement" ? access.accessMode.paymentId : null,
       action: "analyze",
       accessMode: access.accessMode.kind,
+      metadata: activeReserveId ? { reserve_id: activeReserveId } : null,
     });
 
-    return res.json({
+    const aiToolsUntil = new Date(Date.now() + AI_TOOLS_PASS_WINDOW_MS).toISOString();
+    const successBody = {
       success: true,
       data: analysisResult.data,
       accessMode: access.accessMode.kind,
+      ai_tools_until: aiToolsUntil,
       ...(savedAnalysisId ? { savedAnalysisId } : {}),
-    });
+    };
+
+    if (activeIdempotencyKey) {
+      await serviceClient
+        .from("web_analyze_idempotency")
+        .update({
+          status: "completed",
+          response_status: 200,
+          response_body: successBody,
+        })
+        .eq("idempotency_key", activeIdempotencyKey);
+    }
+
+    return res.json(successBody);
   } catch (error: any) {
     if (serviceClient && reservedAccess) {
       await refundWebAccessUnit(serviceClient, reservedAccess);
+      await logWebUsage(serviceClient, {
+        userId: activeUserId,
+        deviceId: activeDeviceId,
+        paymentId: reservedAccess.kind === "entitlement" ? reservedAccess.paymentId : null,
+        action: "refund",
+        accessMode: reservedAccess.kind,
+        metadata: {
+          ...(activeReserveId ? { reserve_id: activeReserveId } : {}),
+          reason: "unexpected_exception",
+        },
+      });
+    }
+    if (serviceClient && activeIdempotencyKey) {
+      await serviceClient
+        .from("web_analyze_idempotency")
+        .update({
+          status: "failed",
+          response_status: 500,
+          response_body: {
+            success: false,
+            error: "خطا در پردازش و تحلیل ابلاغیه قضایی",
+          },
+        })
+        .eq("idempotency_key", activeIdempotencyKey);
     }
     console.error("[Web Analyze Error]:", error);
     return res.status(500).json({
       success: false,
-      error: error?.message || "خطا در پردازش و تحلیل ابلاغیه قضایی",
+      error: "خطا در پردازش و تحلیل ابلاغیه قضایی",
     });
   }
 });
+
+// ==========================================
+// Protected Reconciliation & 90-Day Retention Cleanup Endpoint
+// ==========================================
+
+function timingSafeStringMatch(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function isAuthorizedReconcileRequest(req: express.Request): boolean {
+  const secrets = [
+    process.env.CRON_SECRET?.trim(),
+    process.env.RECONCILE_SECRET?.trim(),
+    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim(),
+  ].filter((s): s is string => Boolean(s));
+
+  if (secrets.length === 0) {
+    return false;
+  }
+
+  const bearer = extractBearerToken(req);
+  const rawHeader = req.headers["x-cron-secret"] ?? req.headers["x-reconcile-secret"];
+  const headerSecret = (Array.isArray(rawHeader) ? rawHeader[0] : rawHeader)?.toString().trim() || "";
+  const candidate = bearer || headerSecret;
+  if (!candidate) {
+    return false;
+  }
+
+  return secrets.some((secret) => timingSafeStringMatch(candidate, secret));
+}
+
+async function handleWebReconcile(req: express.Request, res: express.Response) {
+  try {
+    if (!isAuthorizedReconcileRequest(req)) {
+      return res.status(401).json({
+        success: false,
+        error: "UNAUTHORIZED",
+        message: "دسترسی غیرمجاز به سرویس همگام‌سازی.",
+      });
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({
+        success: false,
+        error: "اتصال به سرویس دیتابیس برقرار نیست.",
+      });
+    }
+
+    const rawStaleMinutes = req.body?.staleMinutes ?? req.query?.staleMinutes;
+    const parsedStale = rawStaleMinutes !== undefined ? Number(rawStaleMinutes) : 5;
+    const staleMinutes =
+      Number.isFinite(parsedStale) && parsedStale >= 0 ? Math.min(parsedStale, 1440) : 5;
+
+    const nowMs = Date.now();
+    const staleBeforeIso = new Date(nowMs - staleMinutes * 60 * 1000).toISOString();
+    const lookbackIso = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    let refundedReserves = 0;
+    const { data: reserveLogs } = await serviceClient
+      .from("web_usage_logs")
+      .select("id, user_id, device_id, payment_id, access_mode, metadata, created_at")
+      .eq("action", "reserve")
+      .lt("created_at", staleBeforeIso)
+      .gte("created_at", lookbackIso)
+      .limit(200);
+
+    if (Array.isArray(reserveLogs) && reserveLogs.length > 0) {
+      const { data: resolvedLogs } = await serviceClient
+        .from("web_usage_logs")
+        .select("action, metadata")
+        .in("action", ["analyze", "refund", "analyze_refund"])
+        .gte("created_at", lookbackIso);
+
+      const resolvedReserveIds = new Set<string>();
+      for (const row of resolvedLogs || []) {
+        const rid = row?.metadata?.reserve_id;
+        if (typeof rid === "string" && rid) {
+          resolvedReserveIds.add(rid);
+        }
+      }
+
+      for (const reserve of reserveLogs) {
+        const reserveId = reserve?.metadata?.reserve_id;
+        if (!reserveId || resolvedReserveIds.has(reserveId)) {
+          continue;
+        }
+
+        let targetAccess: WebAccessMode | null = null;
+        if (reserve.access_mode === "annual" && reserve.user_id) {
+          targetAccess = {
+            kind: "annual",
+            userId: reserve.user_id,
+            today: String(reserve.metadata?.today || getTodayDateString()),
+            usedToday: 0,
+          };
+        } else if (reserve.access_mode === "credits" && reserve.user_id) {
+          targetAccess = {
+            kind: "credits",
+            userId: reserve.user_id,
+          };
+        } else if (reserve.access_mode === "entitlement" && reserve.payment_id && reserve.device_id) {
+          targetAccess = {
+            kind: "entitlement",
+            paymentId: reserve.payment_id,
+            deviceId: reserve.device_id,
+            claimId: reserve.metadata?.claim_id ? String(reserve.metadata.claim_id) : undefined,
+          };
+        }
+
+        if (!targetAccess) {
+          continue;
+        }
+
+        await refundWebAccessUnit(serviceClient, targetAccess);
+        await logWebUsage(serviceClient, {
+          userId: reserve.user_id,
+          deviceId: reserve.device_id,
+          paymentId: reserve.payment_id,
+          action: "refund",
+          accessMode: reserve.access_mode,
+          metadata: {
+            reserve_id: reserveId,
+            reason: "reconcile_stale_reserve",
+            ...(targetAccess.kind === "entitlement" && targetAccess.claimId
+              ? { claim_id: targetAccess.claimId }
+              : {}),
+          },
+        });
+        resolvedReserveIds.add(reserveId);
+        refundedReserves++;
+      }
+    }
+
+    // اعطای سفارش‌های پرداخت‌شده‌ای که به هر دلیل هنوز granted_at ندارند
+    let grantedOrders = 0;
+    const { data: ungrantedOrders } = await serviceClient
+      .from("payments")
+      .select("id, user_id, device_id, product, status, granted_at")
+      .eq("status", "paid")
+      .is("granted_at", null)
+      .limit(100);
+
+    for (const order of ungrantedOrders || []) {
+      try {
+        const granted = await grantWebPaymentEntitlement(serviceClient, order);
+        if (granted) {
+          grantedOrders++;
+        }
+      } catch (grantErr) {
+        console.warn("[Web Reconcile] Grant recovery failed for order:", order.id, grantErr);
+      }
+    }
+
+    // پاک‌سازی خودکار تحلیل‌های ذخیره‌شده قدیمی‌تر از ۹۰ روز و کلیدهای idempotency منقضی‌شده
+    const retentionCutoffIso = new Date(nowMs - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: deletedAnalyses } = await serviceClient
+      .from("web_analyses")
+      .delete()
+      .lt("created_at", retentionCutoffIso)
+      .select("id");
+    const purgedAnalyses = Array.isArray(deletedAnalyses) ? deletedAnalyses.length : 0;
+
+    const { data: deletedIdem } = await serviceClient
+      .from("web_analyze_idempotency")
+      .delete()
+      .lt("expires_at", new Date(nowMs).toISOString())
+      .select("idempotency_key");
+    const purgedIdempotencyKeys = Array.isArray(deletedIdem) ? deletedIdem.length : 0;
+
+    return res.json({
+      success: true,
+      refundedReserves,
+      grantedOrders,
+      purgedAnalyses,
+      purgedIdempotencyKeys,
+      timestamp: new Date(nowMs).toISOString(),
+    });
+  } catch (err: any) {
+    console.error("[Web Reconcile Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطا در اجرای عملیات همگام‌سازی و پاک‌سازی سرور.",
+    });
+  }
+}
+
+apiRouter.get("/web/reconcile", handleWebReconcile);
+apiRouter.post("/web/reconcile", handleWebReconcile);
 
 // Mount the API Router on "/api" (and fallback on "/" in Vercel Serverless)
 app.use("/api", apiRouter);
@@ -4230,7 +4763,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     error:
       err.type === "entity.too.large"
         ? "حجم فایل یا درخواست ارسالی بیش از حد مجاز سرور است."
-        : err.message || "خطای داخلی سرور",
+        : "خطای داخلی سرور",
   });
 });
 

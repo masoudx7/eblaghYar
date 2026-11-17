@@ -176,7 +176,11 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
     }
 
     if (isLimitReached) {
-      setError("سقف ۲ سوال رایگان برای این ابلاغیه به پایان رسیده است. برای بررسی بیشتر لطفاً ابلاغیه جدیدی بارگذاری کنید.");
+      setError(
+        !Capacitor.isNativePlatform()
+          ? "سقف ۲ سوال این ابلاغیه به پایان رسیده است. برای بررسی بیشتر لطفاً ابلاغیه جدیدی بارگذاری کنید."
+          : "سقف ۲ سوال رایگان برای این ابلاغیه به پایان رسیده است. برای بررسی بیشتر لطفاً ابلاغیه جدیدی بارگذاری کنید."
+      );
       return;
     }
 
@@ -511,7 +515,9 @@ export const LegalAssistantChat: React.FC<LegalAssistantChatProps> = ({
         }`}>
           <span>
             {isLimitReached
-              ? "⚠️ سقف ۲ سوال رایگان این ابلاغیه به پایان رسیده است."
+              ? !Capacitor.isNativePlatform()
+                ? "⚠️ سقف ۲ سوال این ابلاغیه به پایان رسیده است."
+                : "⚠️ سقف ۲ سوال رایگان این ابلاغیه به پایان رسیده است."
               : `💬 سهمیه پرسش: ${userQuestionCount} از ۲ سوال استفاده شده (${remainingQuestions} سوال دیگر باقی مانده)`}
           </span>
           <span className="text-[10px] font-semibold text-[#7A7874]">

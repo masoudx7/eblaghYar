@@ -21,5 +21,11 @@
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/web/reconcile",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
