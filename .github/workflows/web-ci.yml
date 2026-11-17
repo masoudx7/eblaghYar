@@ -2,17 +2,23 @@ name: Web CI
 
 on:
   push:
-    branches: [ "web", "main" ]
+    branches:
+      - web
   pull_request:
-    branches: [ "web", "main" ]
+    branches:
+      - web
   workflow_dispatch:
+
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -21,14 +27,21 @@ jobs:
           node-version: "22"
           cache: "npm"
 
-      - name: Install Dependencies
-        run: npm ci --legacy-peer-deps
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
 
-      - name: Typecheck (Lint)
+      - name: Lint (TypeScript typecheck)
         run: npm run lint
 
-      - name: Build Frontend
+      - name: Run tests
+        run: npm test
+
+      - name: Build production bundle
         run: npm run build
 
-      - name: Run Offline Unit & Integration Tests
-        run: npm test
+      - name: Verify no server secrets leaked to client bundle
+        run: |
+          if grep -rnE "GEMINI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_ANON_KEY|ZARINPAL_MERCHANT_ID|UPSTASH_REDIS_REST_TOKEN|TURNSTILE_SECRET_KEY|BAZAAR_RSA_PUBLIC_KEY|BAZAAR_DEVELOPER_API_TOKEN|MYKET_RSA_PUBLIC_KEY" src dist; then
+            echo "ERROR: Server secret identifier detected in client source or build output!"
+            exit 1
+          fi
