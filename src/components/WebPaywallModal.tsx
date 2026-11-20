@@ -164,176 +164,171 @@ export const WebPaywallModal: React.FC<WebPaywallModalProps> = ({
         )}
 
         {/* 3 Product Cards from WEB_PRODUCTS */}
-        <div className="space-y-4 mb-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            {/* Card 1: تحلیل تکی — بدون ثبت‌نام */}
-            <div className="p-5 rounded-2xl border border-[#E5E2D9] bg-[#FAF8F5] hover:border-slate-300 transition-all flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-2.5 mb-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0">
-                    <FileCheck2 className="w-4 h-4 text-blue-300" />
-                  </div>
-                  <div>
-                    <h3 className="font-black text-[#3D3B38] text-sm">
-                      تحلیل تکی — بدون ثبت‌نام
-                    </h3>
-                    <p className="text-[11px] text-[#7A7874]">
-                      مهمان · یک‌بارمصرف روی مرورگر فعلی
-                    </p>
-                  </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 mb-6">
+          {/* Card 1: تحلیل تکی — بدون ثبت‌نام */}
+          <div className="p-4 rounded-2xl border border-[#E5E2D9] bg-[#FAF8F5] hover:border-slate-300 transition-all flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0">
+                  <FileCheck2 className="w-4 h-4 text-blue-300" />
                 </div>
-
-                <p className="text-xs text-[#5E5B55] leading-relaxed mb-4">
-                  ابتدا پرداخت امن انجام می‌شود و بلافاصله پس از بازگشت از درگاه، ابلاغیه را آپلود و تحلیل می‌کنید.
-                </p>
-
-                <div className="mb-4 pb-3 border-b border-[#E5E2D9] flex items-baseline justify-between">
-                  <span className="text-lg font-black text-slate-900 tabular-nums">
-                    {formatRialsAsToman(products.single.amountRials)}{" "}
-                    <span className="text-xs font-bold text-[#7A7874]">تومان</span>
-                  </span>
-                  <span className="text-[11px] text-[#7A7874] tabular-nums">
-                    ({formatRials(products.single.amountRials)} ریال)
-                  </span>
-                </div>
-              </div>
-
-              <button
-                id="web-pay-single-btn"
-                type="button"
-                disabled={loadingProduct !== null}
-                onClick={() => handleBuy("single")}
-                className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {loadingProduct === "single" ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>در حال اتصال به درگاه...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>پرداخت و بارگذاری ابلاغیه</span>
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* Card 2: بسته ۱۰ ابلاغی */}
-            <div className="p-5 rounded-2xl border border-amber-300 bg-gradient-to-br from-amber-50/70 to-yellow-50/60 hover:border-amber-400 transition-all flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-2.5 mb-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-amber-600 text-white flex items-center justify-center shrink-0">
-                    <Layers className="w-4 h-4 text-amber-100" />
-                  </div>
-                  <div>
-                    <h3 className="font-black text-amber-950 text-sm">
-                      بسته ۱۰ ابلاغی
-                    </h3>
-                    <p className="text-[11px] text-amber-800/80">
-                      {toPersianDigits(products.pack_10.credits)} تحلیل · بدون انقضای زمانی
-                    </p>
-                  </div>
-                </div>
-
-                <p className="text-xs text-amber-900/85 leading-relaxed mb-4">
-                  مناسب پرونده‌های چندمرحله‌ای؛ اعتبار به حساب کاربری شما اضافه می‌شود و در هر دستگاهی قابل استفاده است.
-                </p>
-
-                <div className="mb-4 pb-3 border-b border-amber-200/80 flex items-baseline justify-between">
-                  <span className="text-lg font-black text-amber-950 tabular-nums">
-                    {formatRialsAsToman(products.pack_10.amountRials)}{" "}
-                    <span className="text-xs font-bold text-amber-800">تومان</span>
-                  </span>
-                  <span className="text-[11px] text-amber-800/80 tabular-nums">
-                    ({formatRials(products.pack_10.amountRials)} ریال)
-                  </span>
-                </div>
-              </div>
-
-              <button
-                id="web-pay-pack10-btn"
-                type="button"
-                disabled={loadingProduct !== null}
-                onClick={() => handleBuy("pack_10")}
-                className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {loadingProduct === "pack_10" ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>در حال اتصال به درگاه...</span>
-                  </>
-                ) : !webUser ? (
-                  <>
-                    <LogIn className="w-4 h-4" />
-                    <span>ورود و خرید بسته ۱۰ ابلاغی</span>
-                  </>
-                ) : (
-                  <>
-                    <span>خرید بسته ۱۰ ابلاغی</span>
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* Card 3: سالیانه (روزی ۳ ابلاغ) */}
-          <div className="p-5 rounded-2xl border border-blue-200 bg-blue-50/50 hover:bg-blue-50/80 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0 mt-0.5">
-                <Crown className="w-5 h-5 text-blue-100" />
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-black text-slate-900 text-sm sm:text-base">
-                    سالیانه (روزی {toPersianDigits(products.annual.dailyLimit)} ابلاغ)
+                <div>
+                  <h3 className="font-black text-[#3D3B38] text-xs">
+                    تحلیل تکی — بدون ثبت‌نام
                   </h3>
-                  <span className="text-[11px] font-bold text-blue-700">
-                    {toPersianDigits(products.annual.durationDays)} روزه
-                  </span>
+                  <p className="text-[10px] text-[#7A7874]">
+                    مهمان · روی مرورگر فعلی
+                  </p>
                 </div>
-                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                  امکان تحلیل تا {toPersianDigits(products.annual.dailyLimit)} ابلاغیه در هر روز به مدت یک سال کامل روی حساب کاربری وب شما.
-                </p>
-                <div className="mt-2 flex items-baseline gap-2">
-                  <span className="text-base font-black text-slate-900 tabular-nums">
-                    {formatRialsAsToman(products.annual.amountRials)}{" "}
-                    <span className="text-xs font-bold text-slate-600">تومان</span>
-                  </span>
-                  <span className="text-[11px] text-slate-500 tabular-nums">
-                    ({formatRials(products.annual.amountRials)} ریال)
-                  </span>
-                </div>
+              </div>
+
+              <p className="text-[11px] text-[#5E5B55] leading-relaxed mb-3">
+                پرداخت امن و بارگذاری فوری پس از بازگشت از درگاه.
+              </p>
+
+              <div className="mb-3 pb-2.5 border-b border-[#E5E2D9] flex items-baseline justify-between">
+                <span className="text-base font-black text-slate-900 tabular-nums">
+                  {formatRialsAsToman(products.single.amountRials)}{" "}
+                  <span className="text-[10px] font-bold text-[#7A7874]">تومان</span>
+                </span>
+                <span className="text-[10px] text-[#7A7874] tabular-nums">
+                  ({formatRials(products.single.amountRials)} ریال)
+                </span>
               </div>
             </div>
 
             <button
-              id="web-pay-annual-btn"
+              id="web-pay-single-btn"
               type="button"
               disabled={loadingProduct !== null}
-              onClick={() => handleBuy("annual")}
-              className="w-full sm:w-auto py-3 px-5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+              onClick={() => handleBuy("single")}
+              className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              {loadingProduct === "annual" ? (
+              {loadingProduct === "single" ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>در حال اتصال...</span>
+                </>
+              ) : (
+                <>
+                  <span>پرداخت و تحلیل</span>
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Card 2: بسته ۵ ابلاغی */}
+          <div className="p-4 rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50/70 to-blue-50/60 hover:border-indigo-300 transition-all flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                  <Layers className="w-4 h-4 text-indigo-100" />
+                </div>
+                <div>
+                  <h3 className="font-black text-indigo-950 text-xs">
+                    بسته ۵ ابلاغی
+                  </h3>
+                  <p className="text-[10px] text-indigo-800/80">
+                    {toPersianDigits(products.pack_5.credits)} تحلیل · بدون انقضا
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-indigo-900/85 leading-relaxed mb-3">
+                افزایش اعتبار به حساب کاربری برای استفاده در تمامی دستگاه‌ها.
+              </p>
+
+              <div className="mb-3 pb-2.5 border-b border-indigo-200/80 flex items-baseline justify-between">
+                <span className="text-base font-black text-indigo-950 tabular-nums">
+                  {formatRialsAsToman(products.pack_5.amountRials)}{" "}
+                  <span className="text-[10px] font-bold text-indigo-800">تومان</span>
+                </span>
+                <span className="text-[10px] text-indigo-800/80 tabular-nums">
+                  ({formatRials(products.pack_5.amountRials)} ریال)
+                </span>
+              </div>
+            </div>
+
+            <button
+              id="web-pay-pack5-btn"
+              type="button"
+              disabled={loadingProduct !== null}
+              onClick={() => handleBuy("pack_5")}
+              className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              {loadingProduct === "pack_5" ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span>در حال اتصال...</span>
                 </>
               ) : !webUser ? (
                 <>
-                  <LogIn className="w-4 h-4" />
-                  <span>ورود و خرید اشتراک سالیانه</span>
-                </>
-              ) : webUser.is_annual_active ? (
-                <>
-                  <Crown className="w-4 h-4" />
-                  <span>تمدید ۱ ساله اشتراک</span>
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>ورود و خرید بسته ۵ تایی</span>
                 </>
               ) : (
                 <>
-                  <Crown className="w-4 h-4" />
-                  <span>خرید اشتراک سالیانه</span>
+                  <span>خرید بسته ۵ تایی</span>
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Card 3: بسته ۱۰ ابلاغی */}
+          <div className="p-4 rounded-2xl border border-amber-300 bg-gradient-to-br from-amber-50/70 to-yellow-50/60 hover:border-amber-400 transition-all flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-600 text-white flex items-center justify-center shrink-0">
+                  <Layers className="w-4 h-4 text-amber-100" />
+                </div>
+                <div>
+                  <h3 className="font-black text-amber-950 text-xs">
+                    بسته ۱۰ ابلاغی
+                  </h3>
+                  <p className="text-[10px] text-amber-800/80">
+                    {toPersianDigits(products.pack_10.credits)} تحلیل · بدون انقضا
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-amber-900/85 leading-relaxed mb-3">
+                بهترین ارزش برای پرونده‌های متعدد با دسترسی همیشگی.
+              </p>
+
+              <div className="mb-3 pb-2.5 border-b border-amber-200/80 flex items-baseline justify-between">
+                <span className="text-base font-black text-amber-950 tabular-nums">
+                  {formatRialsAsToman(products.pack_10.amountRials)}{" "}
+                  <span className="text-[10px] font-bold text-amber-800">تومان</span>
+                </span>
+                <span className="text-[10px] text-amber-800/80 tabular-nums">
+                  ({formatRials(products.pack_10.amountRials)} ریال)
+                </span>
+              </div>
+            </div>
+
+            <button
+              id="web-pay-pack10-btn"
+              type="button"
+              disabled={loadingProduct !== null}
+              onClick={() => handleBuy("pack_10")}
+              className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              {loadingProduct === "pack_10" ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>در حال اتصال...</span>
+                </>
+              ) : !webUser ? (
+                <>
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>ورود و خرید بسته ۱۰ تایی</span>
+                </>
+              ) : (
+                <>
+                  <span>خرید بسته ۱۰ تایی</span>
+                  <ArrowLeft className="w-3.5 h-3.5" />
                 </>
               )}
             </button>

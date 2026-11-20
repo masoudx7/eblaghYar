@@ -34,8 +34,8 @@ const toPersianDigits = (value: string | number): string => {
 
 const PRODUCT_LABELS: Record<string, string> = {
   single: "تحلیل تکی (مهمان)",
+  pack_5: "بسته ۵ ابلاغی",
   pack_10: "بسته ۱۰ ابلاغی",
-  annual: "اشتراک سالیانه (روزی ۳ ابلاغ)",
 };
 
 export const WebOrdersModal: React.FC<WebOrdersModalProps> = ({

@@ -96,12 +96,29 @@ export function __setSupabaseClientsForTest(serviceClient: any, authClient?: any
   testOverrideAuthClient = authClient ?? null;
 }
 
+function resolveSupabaseUrl(): string | undefined {
+  return (
+    process.env.SUPABASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ||
+    process.env.VITE_SUPABASE_URL?.trim()
+  );
+}
+
+function resolveSupabaseAnonKey(): string | undefined {
+  return (
+    process.env.SUPABASE_ANON_KEY?.trim() ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
+    process.env.SUPABASE_PUBLISHABLE_KEY?.trim() ||
+    process.env.VITE_SUPABASE_ANON_KEY?.trim()
+  );
+}
+
 function getSupabaseClient(): SupabaseClient | null {
   if (testOverrideServiceClient) {
     return testOverrideServiceClient as SupabaseClient;
   }
   if (!supabaseClient) {
-    const supabaseUrl = process.env.SUPABASE_URL?.trim();
+    const supabaseUrl = resolveSupabaseUrl();
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
     if (!supabaseUrl || !supabaseKey) {
@@ -127,8 +144,8 @@ function getSupabaseAuthClient(accessToken?: string): SupabaseClient | null {
   if (testOverrideAuthClient) {
     return testOverrideAuthClient as SupabaseClient;
   }
-  const supabaseUrl = process.env.SUPABASE_URL?.trim();
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY?.trim();
+  const supabaseUrl = resolveSupabaseUrl();
+  const supabaseAnonKey = resolveSupabaseAnonKey();
 
   if (!supabaseUrl || !supabaseAnonKey) {
     return null;
@@ -1887,17 +1904,22 @@ apiRouter.get("/payment/zarinpal/verify", requireLegacyPaymentEnabled, async (re
 // TODO: مقادیر مبلغ (به ریال) جایگزین موقت هستند؛ پیش از انتشار نهایی با قیمت قطعی جایگزین شوند
 export const WEB_PRODUCTS = {
   single: {
-    amountRials: 290000, // TODO: قیمت نهایی تک تحلیل وب (ریال)
+    amountRials: 690000, // ۶۹,۰۰۰ تومان
     credits: 1,
     label: "تحلیل تکی ابلاغیه (نسخه وب)",
   },
+  pack_5: {
+    amountRials: 2390000, // ۲۳۹,۰۰۰ تومان
+    credits: 5,
+    label: "بسته ۵ عددی تحلیل ابلاغیه (نسخه وب)",
+  },
   pack_10: {
-    amountRials: 1990000, // TODO: قیمت نهایی بسته ۱۰ عددی وب (ریال)
+    amountRials: 3690000, // ۳۶۹,۰۰۰ تومان
     credits: 10,
     label: "بسته ۱۰ عددی تحلیل ابلاغیه (نسخه وب)",
   },
   annual: {
-    amountRials: 3990000, // TODO: قیمت نهایی اکانت یک‌ساله وب (ریال)
+    amountRials: 3990000,
     dailyLimit: 3,
     durationDays: 365,
     label: "اشتراک یک‌ساله وب ابلاغ‌یار (تا ۳ تحلیل در روز)",
@@ -2438,36 +2460,90 @@ function getWebRedirectBaseUrl(req: express.Request): string {
   return `${proto}://${host}`;
 }
 
+function isEmailNotConfirmedError(err: any): boolean {
+  const code = String(err?.code || "").toLowerCase();
+  const msg = String(err?.message || err?.error_description || err?.msg || "").toLowerCase();
+  return code === "email_not_confirmed" || msg.includes("email not confirmed");
+}
+
 function translateSupabaseAuthError(err: any, fallback = "خطا در عملیات احراز هویت. لطفاً دوباره تلاش کنید."): string {
-  const msg = String(err?.message || err?.error_description || "").toLowerCase();
-  if (msg.includes("invalid login credentials")) {
+  const code = String(err?.code || "").toLowerCase();
+  const msg = String(err?.message || err?.error_description || err?.msg || "").toLowerCase();
+
+  if (code === "invalid_credentials" || msg.includes("invalid login credentials")) {
     return "ایمیل یا رمز عبور واردشده اشتباه است.";
   }
-  if (msg.includes("email not confirmed")) {
+  if (code === "email_not_confirmed" || msg.includes("email not confirmed")) {
     return "ایمیل شما هنوز تأیید نشده است. لطفاً صندوق ورودی یا پوشه اسپم ایمیل خود را بررسی کرده و روی لینک تأیید کلیک کنید.";
   }
-  if (msg.includes("user already registered") || msg.includes("already been registered")) {
+  if (
+    code === "user_already_exists" ||
+    code === "email_exists" ||
+    msg.includes("user already registered") ||
+    msg.includes("already been registered")
+  ) {
     return "حساب کاربری با این ایمیل قبلاً ثبت شده است. لطفاً وارد شوید یا از گزینه فراموشی رمز استفاده کنید.";
   }
-  if (msg.includes("password should be at least")) {
-    return "رمز عبور باید حداقل ۸ کاراکتر باشد.";
+  if (
+    code === "weak_password" ||
+    code === "password_too_short" ||
+    msg.includes("password should be at least") ||
+    msg.includes("password should contain") ||
+    msg.includes("weak password")
+  ) {
+    return "رمز عبور باید حداقل ۸ کاراکتر و شامل ترکیب مطمئنی از حروف و اعداد باشد.";
   }
-  if (msg.includes("unable to validate email address") || msg.includes("invalid email")) {
+  if (code === "same_password" || msg.includes("different from the old password")) {
+    return "رمز عبور جدید نباید با رمز عبور قبلی یکسان باشد.";
+  }
+  if (
+    code === "email_address_invalid" ||
+    msg.includes("unable to validate email address") ||
+    msg.includes("invalid email")
+  ) {
     return "فرمت ایمیل واردشده معتبر نیست.";
   }
   if (
+    code === "over_email_send_rate_limit" ||
+    code === "over_request_rate_limit" ||
     msg.includes("rate limit") ||
     msg.includes("over_email_send_rate_limit") ||
     msg.includes("only request this after") ||
-    msg.includes("too many requests")
+    msg.includes("too many requests") ||
+    msg.includes("security purposes, you can only request this after")
   ) {
     return "تعداد درخواست‌ها بیش از حد مجاز است. لطفاً چند دقیقه دیگر دوباره تلاش کنید.";
   }
-  if (msg.includes("token has expired") || msg.includes("invalid jwt") || msg.includes("invalid refresh token") || msg.includes("refresh token not found")) {
-    return "نشست کاربری شما منقضی یا نامعتبر است. لطفاً دوباره وارد شوید.";
+  if (
+    msg.includes("error sending confirmation email") ||
+    msg.includes("error sending recovery email") ||
+    msg.includes("error sending magic link email") ||
+    msg.includes("smtp")
+  ) {
+    return "ارسال ایمیل تأیید از سوی سرور ایمیل انجام نشد. لطفاً دقایقی دیگر تلاش کنید یا از پنل مدیریت/تنظیمات ایمیل بررسی شود.";
   }
-  if (msg.includes("signup is disabled")) {
-    return "ثبت‌نام کاربران جدید در حال حاضر غیرفعال است.";
+  if (msg.includes("database error saving new user") || msg.includes("database error updating user")) {
+    return "خطای پایگاه داده هنگام ثبت اطلاعات کاربر. لطفاً مطمئن شوید اسکریپت‌های SQL پروفایل در Supabase اجرا شده‌اند.";
+  }
+  if (
+    code === "otp_expired" ||
+    code === "bad_jwt" ||
+    msg.includes("token has expired") ||
+    msg.includes("otp_expired") ||
+    msg.includes("invalid jwt") ||
+    msg.includes("invalid refresh token") ||
+    msg.includes("refresh token not found") ||
+    msg.includes("auth session missing")
+  ) {
+    return "نشست کاربری یا لینک تأیید منقضی یا نامعتبر است. لطفاً دوباره درخواست دهید.";
+  }
+  if (
+    code === "signup_disabled" ||
+    code === "email_provider_disabled" ||
+    msg.includes("signup is disabled") ||
+    msg.includes("email signups are disabled")
+  ) {
+    return "ثبت‌نام با ایمیل در حال حاضر غیرفعال است.";
   }
   return fallback;
 }
@@ -2509,25 +2585,42 @@ async function fetchOrEnsureWebProfile(authUser: { id: string; email?: string | 
     .eq("id", authUser.id)
     .maybeSingle();
 
+  const metaFullName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || null;
+
   if (existingProfile) {
+    const patch: Record<string, any> = {};
+    if (!existingProfile.email && authUser.email) {
+      patch.email = authUser.email;
+    }
+    if (!existingProfile.full_name && metaFullName) {
+      patch.full_name = metaFullName;
+    }
+    if (Object.keys(patch).length > 0) {
+      const { data: updatedProfile } = await serviceClient
+        .from("profiles")
+        .update(patch)
+        .eq("id", authUser.id)
+        .select("*")
+        .maybeSingle();
+      return formatWebUserPayload(authUser, updatedProfile || { ...existingProfile, ...patch });
+    }
     return formatWebUserPayload(authUser, existingProfile);
   }
 
-  const fullName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || null;
   const { data: insertedProfile } = await serviceClient
     .from("profiles")
     .upsert(
       {
         id: authUser.id,
         email: authUser.email || null,
-        full_name: fullName,
+        full_name: metaFullName,
       },
       { onConflict: "id" }
     )
     .select("*")
     .maybeSingle();
 
-  return formatWebUserPayload(authUser, insertedProfile || { full_name: fullName, credits: 0 });
+  return formatWebUserPayload(authUser, insertedProfile || { full_name: metaFullName, credits: 0 });
 }
 
 function extractBearerToken(req: express.Request): string | null {
@@ -2539,9 +2632,11 @@ function extractBearerToken(req: express.Request): string | null {
 
 // GET /api/web/config
 apiRouter.get("/web/config", (_req, res) => {
+  const siteKey = process.env.TURNSTILE_SITE_KEY?.trim() || "";
+  const secretKey = process.env.TURNSTILE_SECRET_KEY?.trim() || "";
   return res.json({
     success: true,
-    turnstileSiteKey: process.env.TURNSTILE_SITE_KEY?.trim() || null,
+    turnstileSiteKey: siteKey && secretKey ? siteKey : null,
   });
 });
 
@@ -2600,6 +2695,11 @@ apiRouter.post("/web/auth/register", webAuthMutationRateLimiter, async (req, res
     });
 
     if (error) {
+      console.error("[Web Auth Register Supabase Error]:", {
+        code: (error as any)?.code,
+        status: (error as any)?.status,
+        message: error.message,
+      });
       return res.status(400).json({
         success: false,
         error: translateSupabaseAuthError(error, "ثبت‌نام انجام نشد. لطفاً اطلاعات را بررسی کنید."),
@@ -2627,6 +2727,14 @@ apiRouter.post("/web/auth/register", webAuthMutationRateLimiter, async (req, res
         },
         user: userPayload,
       });
+    }
+
+    // Pre-create profile row cleanly if service client is available (even before email confirmation)
+    if (data.user?.id) {
+      await fetchOrEnsureWebProfile({
+        ...data.user,
+        user_metadata: { ...(data.user.user_metadata || {}), full_name: rawName },
+      }).catch(() => {});
     }
 
     return res.status(201).json({
@@ -2678,8 +2786,17 @@ apiRouter.post("/web/auth/login", webAuthMutationRateLimiter, async (req, res) =
     });
 
     if (error || !data.session || !data.user) {
+      const emailNotConfirmed = isEmailNotConfirmedError(error);
+      if (error && !String(error.message || "").toLowerCase().includes("invalid login credentials")) {
+        console.warn("[Web Auth Login Supabase Warning]:", {
+          code: (error as any)?.code,
+          status: (error as any)?.status,
+          message: error.message,
+        });
+      }
       return res.status(401).json({
         success: false,
+        code: emailNotConfirmed ? "EMAIL_NOT_CONFIRMED" : "INVALID_CREDENTIALS",
         error: translateSupabaseAuthError(error, "ایمیل یا رمز عبور اشتباه است."),
       });
     }
@@ -2777,6 +2894,136 @@ apiRouter.post("/web/auth/logout", async (req, res) => {
   }
 });
 
+// POST /api/web/auth/resend-verification
+apiRouter.post("/web/auth/resend-verification", webAuthMutationRateLimiter, async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است.",
+      });
+    }
+
+    const turnstileCheck = await verifyTurnstileIfEnabled(req.body?.turnstileToken, getClientIp(req));
+    if ("error" in turnstileCheck) {
+      return res.status(400).json({
+        success: false,
+        error: turnstileCheck.error,
+      });
+    }
+
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    if (!email || email.length > 254 || !EMAIL_REGEX.test(email)) {
+      return res.status(400).json({
+        success: false,
+        error: "لطفاً یک نشانی ایمیل معتبر وارد کنید.",
+      });
+    }
+
+    const baseUrl = getWebRedirectBaseUrl(req);
+    const { error } = await authClient.auth.resend({
+      type: "signup",
+      email,
+      options: {
+        emailRedirectTo: `${baseUrl}/?auth=verified`,
+      },
+    });
+
+    if (error) {
+      console.error("[Web Auth Resend Verification Error]:", {
+        code: (error as any)?.code,
+        message: error.message,
+      });
+      const msg = String(error.message || "").toLowerCase();
+      if (msg.includes("rate limit") || msg.includes("only request this after") || msg.includes("too many requests")) {
+        return res.status(429).json({
+          success: false,
+          error: "تعداد درخواست ارسال مجدد ایمیل تأیید بیش از حد مجاز است. لطفاً کمی بعد تلاش کنید.",
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "ارسال مجدد ایمیل تأیید با خطا مواجه شد."),
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "لینک تأیید جدید به ایمیل شما ارسال شد. لطفاً صندوق ورودی و پوشه اسپم را بررسی کنید.",
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Resend Verification Exception]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در ارسال مجدد ایمیل تأیید.",
+    });
+  }
+});
+
+// POST /api/web/auth/verify-otp (for Supabase token_hash links)
+apiRouter.post("/web/auth/verify-otp", webAuthMutationRateLimiter, async (req, res) => {
+  try {
+    const authClient = getSupabaseAuthClient();
+    if (!authClient) {
+      return res.status(503).json({
+        success: false,
+        error: "سرویس احراز هویت وب پیکربندی نشده است.",
+      });
+    }
+
+    const tokenHash = String(req.body?.tokenHash ?? req.body?.token_hash ?? "").trim();
+    const rawType = String(req.body?.type ?? "signup").trim().toLowerCase();
+    const allowedTypes = new Set(["signup", "recovery", "email", "magiclink", "invite", "email_change"]);
+
+    if (!tokenHash || tokenHash.length > 512) {
+      return res.status(400).json({
+        success: false,
+        error: "توکن تأیید نامعتبر یا ناقص است.",
+      });
+    }
+
+    const otpType = (allowedTypes.has(rawType) ? rawType : "signup") as
+      | "signup"
+      | "recovery"
+      | "email"
+      | "magiclink"
+      | "invite"
+      | "email_change";
+
+    const { data, error } = await authClient.auth.verifyOtp({
+      token_hash: tokenHash,
+      type: otpType,
+    });
+
+    if (error || !data?.session || !data?.user) {
+      return res.status(400).json({
+        success: false,
+        error: translateSupabaseAuthError(error, "لینک تأیید منقضی یا نامعتبر است. لطفاً دوباره درخواست دهید."),
+      });
+    }
+
+    const userPayload = await fetchOrEnsureWebProfile(data.user);
+
+    return res.json({
+      success: true,
+      type: otpType,
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_at: data.session.expires_at ?? null,
+      },
+      user: userPayload,
+    });
+  } catch (err: any) {
+    console.error("[Web Auth Verify OTP Error]:", err);
+    return res.status(500).json({
+      success: false,
+      error: "خطای سرور در تأیید لینک ایمیل.",
+    });
+  }
+});
+
 // POST /api/web/auth/forgot-password
 apiRouter.post("/web/auth/forgot-password", webAuthMutationRateLimiter, async (req, res) => {
   try {
@@ -2810,6 +3057,10 @@ apiRouter.post("/web/auth/forgot-password", webAuthMutationRateLimiter, async (r
     });
 
     if (error) {
+      console.error("[Web Auth Forgot Password Supabase Error]:", {
+        code: (error as any)?.code,
+        message: error.message,
+      });
       const msg = String(error.message || "").toLowerCase();
       if (msg.includes("rate limit") || msg.includes("only request this after") || msg.includes("too many requests")) {
         return res.status(429).json({
@@ -2898,6 +3149,7 @@ apiRouter.post("/web/auth/update-password", webAuthMutationRateLimiter, async (r
     }
 
     const newPassword = String(req.body?.password ?? "");
+    const refreshToken = String(req.body?.refresh_token ?? req.body?.refreshToken ?? "").trim();
     if (!newPassword || newPassword.length < 8 || newPassword.length > 128) {
       return res.status(400).json({
         success: false,
@@ -2931,6 +3183,12 @@ apiRouter.post("/web/auth/update-password", webAuthMutationRateLimiter, async (r
           success: false,
           error: "سرویس احراز هویت در دسترس نیست.",
         });
+      }
+      if (refreshToken && typeof scopedClient.auth.setSession === "function") {
+        await scopedClient.auth.setSession({
+          access_token: token,
+          refresh_token: refreshToken,
+        }).catch(() => {});
       }
       const { error: updateErr } = await scopedClient.auth.updateUser({ password: newPassword });
       if (updateErr) {
@@ -3021,8 +3279,9 @@ async function grantWebPaymentEntitlement(
       .from("profiles")
       .upsert({ id: userId }, { onConflict: "id", ignoreDuplicates: true });
 
-    if (payment.product === "pack_10") {
-      const creditsDelta = WEB_PRODUCTS.pack_10.credits;
+    if (payment.product === "pack_10" || payment.product === "pack_5") {
+      const productCfg = WEB_PRODUCTS[payment.product as keyof typeof WEB_PRODUCTS] as { credits: number };
+      const creditsDelta = productCfg.credits;
       const { error: rpcError } = await serviceClient.rpc("increment_profile_credits", {
         p_user_id: userId,
         p_delta: creditsDelta,
@@ -3053,48 +3312,6 @@ async function grantWebPaymentEntitlement(
         }
         if (!casSuccess) {
           throw new Error("خطا در افزایش اتمیک اعتبار پروفایل.");
-        }
-      }
-    } else if (payment.product === "annual") {
-      const durationDays = WEB_PRODUCTS.annual.durationDays;
-      const { error: rpcErr } = await serviceClient.rpc("extend_profile_annual", {
-        p_user_id: userId,
-        p_duration_days: durationDays,
-      });
-
-      if (rpcErr) {
-        let casSuccess = false;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const { data: prof } = await serviceClient
-            .from("profiles")
-            .select("annual_expires_at")
-            .eq("id", userId)
-            .maybeSingle();
-
-          const nowMs = Date.now();
-          const existingIso: string | null = prof?.annual_expires_at || null;
-          const existingMs = existingIso ? new Date(existingIso).getTime() : 0;
-          const baseMs = Number.isFinite(existingMs) && existingMs > nowMs ? existingMs : nowMs;
-          const newExpiresAt = new Date(
-            baseMs + durationDays * 24 * 60 * 60 * 1000
-          ).toISOString();
-
-          let updateQuery = serviceClient
-            .from("profiles")
-            .update({ annual_expires_at: newExpiresAt })
-            .eq("id", userId);
-          updateQuery = existingIso
-            ? updateQuery.eq("annual_expires_at", existingIso)
-            : updateQuery.is("annual_expires_at", null);
-
-          const { data: updated } = await updateQuery.select("id").maybeSingle();
-          if (updated) {
-            casSuccess = true;
-            break;
-          }
-        }
-        if (!casSuccess) {
-          throw new Error("خطا در ثبت اشتراک یک‌ساله در پروفایل.");
         }
       }
     }
@@ -3173,12 +3390,12 @@ apiRouter.post("/web/payment/request", async (req, res) => {
       }
     }
 
-    // بسته ۱۰ عددی و اشتراک سالیانه نیازمند نشست معتبر کاربر وب هستند
-    if (product === "pack_10" || product === "annual") {
+    // بسته‌های اعتباری (۵ و ۱۰ عددی) نیازمند نشست معتبر کاربر وب هستند
+    if (product === "pack_10" || product === "pack_5") {
       if (!verifiedUserId) {
         return res.status(401).json({
           success: false,
-          error: "برای خرید این بسته یا اشتراک ابتدا باید وارد حساب کاربری وب خود شوید.",
+          error: "برای خرید این بسته ابتدا باید وارد حساب کاربری وب خود شوید.",
         });
       }
     } else {
@@ -3899,6 +4116,323 @@ apiRouter.get("/web/orders", async (req, res) => {
       success: false,
       error: "خطای سرور در دریافت تاریخچه سفارش‌ها.",
     });
+  }
+});
+
+// ==========================================
+// Admin Routes (/api/admin/*) — Restricted to masoudx7@gmail.com
+// ==========================================
+
+async function verifyAdminUser(req: express.Request): Promise<{ userId: string; email: string } | null> {
+  const token = extractBearerToken(req);
+  if (!token) return null;
+  const authClient = getSupabaseAuthClient();
+  if (!authClient) return null;
+  const { data: userData, error: userErr } = await authClient.auth.getUser(token);
+  if (userErr || !userData?.user || !userData.user.email) return null;
+  if (userData.user.email.toLowerCase().trim() !== "masoudx7@gmail.com") return null;
+  return { userId: userData.user.id, email: userData.user.email };
+}
+
+apiRouter.get("/admin/users", async (req, res) => {
+  try {
+    const admin = await verifyAdminUser(req);
+    if (!admin) {
+      return res.status(403).json({ success: false, error: "دسترسی غیرمجاز. فقط ادمین مجاز به مشاهده است." });
+    }
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس دیتابیس در دسترس نیست." });
+    }
+
+    const { data: profiles, error: profErr } = await serviceClient
+      .from("profiles")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (profErr) {
+      return res.status(500).json({ success: false, error: "خطا در دریافت لیست کاربران از دیتابیس." });
+    }
+
+    const profileMap = new Map<string, any>();
+    for (const p of profiles || []) {
+      profileMap.set(p.id, { ...p });
+    }
+
+    if (typeof serviceClient.auth?.admin?.listUsers === "function") {
+      try {
+        const { data: authListData } = await serviceClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        const authUsers = authListData?.users || [];
+        const missingProfiles: any[] = [];
+
+        for (const au of authUsers) {
+          const existing = profileMap.get(au.id);
+          const metaName = au.user_metadata?.full_name || au.user_metadata?.name || null;
+          if (existing) {
+            existing.email = existing.email || au.email || "";
+            existing.full_name = existing.full_name || metaName || "";
+            existing.email_confirmed = Boolean((au as any).email_confirmed_at);
+          } else {
+            const synthesized = {
+              id: au.id,
+              email: au.email || "",
+              full_name: metaName || "",
+              credits: 0,
+              annual_expires_at: null,
+              last_analysis_date: null,
+              daily_analyses_count: 0,
+              created_at: au.created_at || new Date().toISOString(),
+              email_confirmed: Boolean((au as any).email_confirmed_at),
+            };
+            profileMap.set(au.id, synthesized);
+            missingProfiles.push({
+              id: au.id,
+              email: au.email || null,
+              full_name: metaName,
+              credits: 0,
+            });
+          }
+        }
+
+        if (missingProfiles.length > 0) {
+          await serviceClient
+            .from("profiles")
+            .upsert(missingProfiles, { onConflict: "id", ignoreDuplicates: true });
+        }
+      } catch (listErr) {
+        console.warn("[Admin List Auth Users Warning]:", listErr);
+      }
+    }
+
+    const mergedUsers = Array.from(profileMap.values()).sort((a, b) =>
+      String(b.created_at || "").localeCompare(String(a.created_at || ""))
+    );
+
+    return res.json({
+      success: true,
+      users: mergedUsers,
+    });
+  } catch (err: any) {
+    console.error("[Admin Users Error]:", err);
+    return res.status(500).json({ success: false, error: "خطای سرور در بارگذاری لیست کاربران." });
+  }
+});
+
+apiRouter.post("/admin/users/credits", async (req, res) => {
+  try {
+    const admin = await verifyAdminUser(req);
+    if (!admin) {
+      return res.status(403).json({ success: false, error: "دسترسی غیرمجاز." });
+    }
+    const userId = String(req.body?.userId || "").trim();
+    const delta = Number(req.body?.delta);
+    const absolute = Number(req.body?.absoluteCredits);
+
+    if (!userId || !UUID_REGEX.test(userId)) {
+      return res.status(400).json({ success: false, error: "شناسه کاربر معتبر نیست." });
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس دیتابیس در دسترس نیست." });
+    }
+
+    const { data: profile } = await serviceClient
+      .from("profiles")
+      .select("id, email, full_name, credits")
+      .eq("id", userId)
+      .maybeSingle();
+
+    const currentCredits = Number(profile?.credits ?? 0);
+    let newCredits = currentCredits;
+
+    if (req.body?.absoluteCredits !== undefined && Number.isFinite(absolute)) {
+      newCredits = Math.max(0, Math.floor(absolute));
+    } else if (req.body?.delta !== undefined && Number.isFinite(delta)) {
+      newCredits = Math.max(0, Math.floor(currentCredits + delta));
+    } else {
+      return res.status(400).json({ success: false, error: "مقدار اعتبار نامعتبر است." });
+    }
+
+    let updateErr: any = null;
+    if (profile) {
+      const resUpdate = await serviceClient
+        .from("profiles")
+        .update({ credits: newCredits })
+        .eq("id", userId);
+      updateErr = resUpdate.error;
+    } else {
+      let authEmail: string | null = null;
+      let authName: string | null = null;
+      if (typeof serviceClient.auth?.admin?.getUserById === "function") {
+        const { data: auData } = await serviceClient.auth.admin.getUserById(userId).catch(() => ({ data: null }));
+        authEmail = auData?.user?.email || null;
+        authName = auData?.user?.user_metadata?.full_name || null;
+      }
+      const resUpsert = await serviceClient
+        .from("profiles")
+        .upsert(
+          { id: userId, email: authEmail, full_name: authName, credits: newCredits },
+          { onConflict: "id" }
+        );
+      updateErr = resUpsert.error;
+    }
+
+    if (updateErr) {
+      return res.status(500).json({ success: false, error: "خطا در به‌روزرسانی اعتبار کاربر." });
+    }
+
+    await logWebUsage(serviceClient, {
+      userId: admin.userId,
+      action: "admin_credits_update",
+      accessMode: `target_${userId}_credits_${newCredits}`,
+    });
+
+    return res.json({
+      success: true,
+      userId,
+      credits: newCredits,
+    });
+  } catch (err: any) {
+    console.error("[Admin Credits Update Error]:", err);
+    return res.status(500).json({ success: false, error: "خطای سرور در تغییر اعتبار کاربر." });
+  }
+});
+
+apiRouter.post("/admin/users/create", async (req, res) => {
+  try {
+    const admin = await verifyAdminUser(req);
+    if (!admin) {
+      return res.status(403).json({ success: false, error: "دسترسی غیرمجاز." });
+    }
+
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    const fullName = String(req.body?.fullName || "").trim();
+    const rawCredits = Number(req.body?.initialCredits ?? 1);
+    const initialCredits = Number.isFinite(rawCredits) ? Math.max(0, Math.floor(rawCredits)) : 1;
+
+    if (!email || !EMAIL_REGEX.test(email) || password.length < 8 || password.length > 128) {
+      return res.status(400).json({
+        success: false,
+        error: "ایمیل معتبر و رمز عبور (حداقل ۸ کاراکتر) الزامی است.",
+      });
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس دیتابیس در دسترس نیست." });
+    }
+
+    const { data: createData, error: createErr } = await serviceClient.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: fullName || email.split("@")[0] },
+    });
+
+    if (createErr || !createData?.user) {
+      return res.status(400).json({
+        success: false,
+        error: translateSupabaseAuthError(createErr, "خطا در ایجاد حساب کاربری."),
+      });
+    }
+
+    const newUserId = createData.user.id;
+
+    const { error: upsertErr } = await serviceClient
+      .from("profiles")
+      .upsert(
+        {
+          id: newUserId,
+          email,
+          full_name: fullName || email.split("@")[0],
+          credits: initialCredits,
+        },
+        { onConflict: "id" }
+      );
+
+    if (upsertErr) {
+      console.error("[Admin Create Profile Upsert Error]:", upsertErr);
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        id: newUserId,
+        email,
+        full_name: fullName || email.split("@")[0],
+        credits: initialCredits,
+        email_confirmed: true,
+      },
+    });
+  } catch (err: any) {
+    console.error("[Admin Create User Error]:", err);
+    return res.status(500).json({ success: false, error: "خطای سرور در ثبت کاربر جدید." });
+  }
+});
+
+apiRouter.post("/admin/users/update", async (req, res) => {
+  try {
+    const admin = await verifyAdminUser(req);
+    if (!admin) {
+      return res.status(403).json({ success: false, error: "دسترسی غیرمجاز." });
+    }
+
+    const userId = String(req.body?.userId || "").trim();
+    const password = typeof req.body?.password === "string" ? req.body.password : undefined;
+    const confirmEmail = req.body?.confirmEmail === true;
+
+    if (!userId || !UUID_REGEX.test(userId)) {
+      return res.status(400).json({ success: false, error: "شناسه کاربر معتبر نیست." });
+    }
+
+    if (password !== undefined && (password.length < 8 || password.length > 128)) {
+      return res.status(400).json({
+        success: false,
+        error: "رمز عبور جدید باید بین ۸ تا ۱۲۸ کاراکتر باشد.",
+      });
+    }
+
+    if (!password && !confirmEmail) {
+      return res.status(400).json({
+        success: false,
+        error: "هیچ تغییری برای اعمال ارسال نشده است.",
+      });
+    }
+
+    const serviceClient = getSupabaseClient();
+    if (!serviceClient) {
+      return res.status(503).json({ success: false, error: "سرویس دیتابیس در دسترس نیست." });
+    }
+
+    const attrs: Record<string, any> = {};
+    if (password) attrs.password = password;
+    if (confirmEmail) attrs.email_confirm = true;
+
+    const { error: updateErr } = await serviceClient.auth.admin.updateUserById(userId, attrs);
+    if (updateErr) {
+      return res.status(400).json({
+        success: false,
+        error: translateSupabaseAuthError(updateErr, "به‌روزرسانی اطلاعات کاربر انجام نشد."),
+      });
+    }
+
+    await logWebUsage(serviceClient, {
+      userId: admin.userId,
+      action: "admin_user_update",
+      accessMode: `target_${userId}_${password ? "pw" : ""}${confirmEmail ? "_confirm" : ""}`,
+    });
+
+    return res.json({
+      success: true,
+      message: password
+        ? "رمز عبور کاربر با موفقیت تغییر یافت."
+        : "ایمیل کاربر با موفقیت تأیید شد.",
+    });
+  } catch (err: any) {
+    console.error("[Admin Update User Error]:", err);
+    return res.status(500).json({ success: false, error: "خطای سرور در به‌روزرسانی حساب کاربری." });
   }
 });
 

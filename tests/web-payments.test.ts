@@ -150,9 +150,9 @@ describe("Phase 2: Web Payments Integrity, Idempotency (100/101/granted_at), Fai
     const attacker = store.seedUser({ email: "attacker@example.com" });
     const order = store.seedPayment({
       user_id: owner.id,
-      product: "annual",
+      product: "pack_5",
       status: "pending",
-      amount_rials: WEB_PRODUCTS.annual.amountRials,
+      amount_rials: WEB_PRODUCTS.pack_5.amountRials,
       authority: "A00000000000000000000000000000000300",
     });
 

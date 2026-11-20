@@ -35,6 +35,7 @@ interface HeaderProps {
   onWebLogout?: () => void;
   onRefreshWebUser?: () => void;
   onOpenWebOrders?: () => void;
+  onOpenAdminPanel?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -54,6 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
   onWebLogout,
   onRefreshWebUser,
   onOpenWebOrders,
+  onOpenAdminPanel,
 }) => {
   const isNative = Capacitor.isNativePlatform();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -300,6 +302,20 @@ export const Header: React.FC<HeaderProps> = ({
                         >
                           <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
                           <span>به‌روزرسانی موجودی</span>
+                        </button>
+                      )}
+                      {webUser?.email?.toLowerCase() === "masoudx7@gmail.com" && onOpenAdminPanel && (
+                        <button
+                          id="admin-panel-btn"
+                          type="button"
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
+                            onOpenAdminPanel();
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-black text-purple-700 hover:bg-purple-50 rounded-xl transition-colors cursor-pointer"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
+                          <span>پنل مدیریت ادمین</span>
                         </button>
                       )}
                       {onWebLogout && (

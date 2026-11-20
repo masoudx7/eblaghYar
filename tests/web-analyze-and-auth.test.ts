@@ -261,4 +261,94 @@ describe("Phase 3 & 5: Web Analyze Atomic Reserve/Refund, Annual Daily Quota, Au
       });
     expect(validCaptcha.status).toBe(201);
   });
+
+  it("gates turnstileSiteKey in /api/web/config unless BOTH site and secret keys exist, and handles unconfirmed login, resend-verification, verify-otp, and admin sync", async () => {
+    // Only site key set (misconfiguration) -> must return null so UI doesn't deadlock
+    process.env.TURNSTILE_SITE_KEY = "0x4AAAAAAA_site";
+    delete process.env.TURNSTILE_SECRET_KEY;
+    const partialCfg = await request(app).get("/api/web/config");
+    expect(partialCfg.status).toBe(200);
+    expect(partialCfg.body.turnstileSiteKey).toBeNull();
+
+    // Both keys set -> returns site key
+    process.env.TURNSTILE_SECRET_KEY = "0x4AAAAAAA_secret";
+    const fullCfg = await request(app).get("/api/web/config");
+    expect(fullCfg.status).toBe(200);
+    expect(fullCfg.body.turnstileSiteKey).toBe("0x4AAAAAAA_site");
+
+    // Disable turnstile for auth flow test
+    delete process.env.TURNSTILE_SITE_KEY;
+    delete process.env.TURNSTILE_SECRET_KEY;
+
+    // Seed unconfirmed user without profile row
+    const unconfirmed = store.seedUser({
+      email: "unverified@example.com",
+      password: "Password123!",
+      emailConfirmed: false,
+      skipProfile: true,
+    });
+
+    const loginBlocked = await request(app)
+      .post("/api/web/auth/login")
+      .send({ email: "unverified@example.com", password: "Password123!" });
+    expect(loginBlocked.status).toBe(401);
+    expect(loginBlocked.body.code).toBe("EMAIL_NOT_CONFIRMED");
+
+    const resendRes = await request(app)
+      .post("/api/web/auth/resend-verification")
+      .send({ email: "unverified@example.com" });
+    expect(resendRes.status).toBe(200);
+    expect(resendRes.body.success).toBe(true);
+
+    // Invalid token_hash -> 400
+    const badOtp = await request(app)
+      .post("/api/web/auth/verify-otp")
+      .send({ tokenHash: "expired_token", type: "signup" });
+    expect(badOtp.status).toBe(400);
+
+    // Valid token_hash -> 200 and logs user in
+    const goodOtp = await request(app)
+      .post("/api/web/auth/verify-otp")
+      .send({ tokenHash: "valid_unverified@example.com", type: "signup" });
+    expect(goodOtp.status).toBe(200);
+    expect(goodOtp.body.session.access_token).toBeTruthy();
+    expect(goodOtp.body.user.email).toBe("unverified@example.com");
+
+    // Admin listUsers merges users missing profiles & allows password update
+    const admin = store.seedUser({ email: "masoudx7@gmail.com", password: "AdminPass123!" });
+    const orphanUser = store.seedUser({
+      email: "orphan@example.com",
+      password: "OldUserPass123!",
+      emailConfirmed: false,
+      skipProfile: true,
+    });
+
+    const listAdmin = await request(app)
+      .get("/api/admin/users")
+      .set("Authorization", `Bearer ${admin.accessToken}`);
+    expect(listAdmin.status).toBe(200);
+    const listedOrphan = listAdmin.body.users.find((u: any) => u.id === orphanUser.id);
+    expect(listedOrphan).toBeTruthy();
+    expect(listedOrphan.email_confirmed).toBe(false);
+
+    // Admin credits update works via upsert even if profile wasn't present initially
+    const creditRes = await request(app)
+      .post("/api/admin/users/credits")
+      .set("Authorization", `Bearer ${admin.accessToken}`)
+      .send({ userId: orphanUser.id, delta: 3 });
+    expect(creditRes.status).toBe(200);
+    expect(creditRes.body.credits).toBe(3);
+
+    // Admin updates user email confirmation & password
+    const adminUpdate = await request(app)
+      .post("/api/admin/users/update")
+      .set("Authorization", `Bearer ${admin.accessToken}`)
+      .send({ userId: orphanUser.id, confirmEmail: true, password: "NewUserPass99!" });
+    expect(adminUpdate.status).toBe(200);
+
+    const loginUpdated = await request(app)
+      .post("/api/web/auth/login")
+      .send({ email: "orphan@example.com", password: "NewUserPass99!" });
+    expect(loginUpdated.status).toBe(200);
+  });
 });

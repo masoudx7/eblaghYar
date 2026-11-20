@@ -20,6 +20,7 @@ import {
   webRegister,
   webForgotPassword,
   webUpdatePassword,
+  webResendVerification,
   webFetchMe,
   fetchWebConfig,
   WebUserProfile,
@@ -65,6 +66,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Optional Cloudflare Turnstile CAPTCHA state
   const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileLoadError, setTurnstileLoadError] = useState<boolean>(false);
+  const [turnstileReloadTick, setTurnstileReloadTick] = useState<number>(0);
+  const [showResendVerification, setShowResendVerification] = useState<boolean>(false);
+  const [isResendingVerification, setIsResendingVerification] = useState<boolean>(false);
   const turnstileContainerRef = useRef<HTMLDivElement>(null);
   const turnstileWidgetIdRef = useRef<string | null>(null);
 
@@ -74,6 +79,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setErrorMsg(null);
       setSuccessMsg(null);
       setTurnstileToken(null);
+      setTurnstileLoadError(false);
+      setShowResendVerification(false);
       if (initialTab === "recovery") {
         setPassword("");
         setConfirmPassword("");
@@ -94,14 +101,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     };
   }, [isOpen]);
 
-  // Mount / unmount Turnstile widget on register / forgot tabs if configured
-  useEffect(() => {
-    const needsTurnstile = Boolean(
-      isOpen &&
+  const needsTurnstile = Boolean(
+    isOpen &&
       turnstileSiteKey &&
-      (activeTab === "register" || activeTab === "forgot")
-    );
+      (activeTab === "register" || activeTab === "forgot" || (activeTab === "login" && showResendVerification))
+  );
 
+  // Mount / unmount Turnstile widget on register / forgot / resend-verification if configured
+  useEffect(() => {
     const cleanupWidget = () => {
       if (turnstileWidgetIdRef.current && window.turnstile) {
         try {
@@ -116,15 +123,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     if (!needsTurnstile) {
       cleanupWidget();
+      setTurnstileLoadError(false);
       return;
     }
 
     let cancelled = false;
+    setTurnstileLoadError(false);
+
     const renderWidget = () => {
       if (cancelled || !turnstileContainerRef.current || !window.turnstile || !turnstileSiteKey) {
         return;
       }
       cleanupWidget();
+      setTurnstileLoadError(false);
       turnstileWidgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
         sitekey: turnstileSiteKey,
         theme: "light",
@@ -143,32 +154,67 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     if (window.turnstile) {
       renderWidget();
-    } else {
-      const existingScript = document.querySelector<HTMLScriptElement>(
-        'script[src*="challenges.cloudflare.com/turnstile"]'
-      );
-      if (!existingScript) {
-        const script = document.createElement("script");
-        script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-        script.async = true;
-        script.defer = true;
-        script.onload = renderWidget;
-        document.head.appendChild(script);
-      } else {
-        existingScript.addEventListener("load", renderWidget);
-        return () => {
-          cancelled = true;
-          existingScript.removeEventListener("load", renderWidget);
-          cleanupWidget();
-        };
-      }
+      return () => {
+        cancelled = true;
+        cleanupWidget();
+      };
     }
+
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handleLoadError = () => {
+      if (!cancelled) {
+        setTurnstileLoadError(true);
+      }
+    };
+
+    const existingScript = document.querySelector<HTMLScriptElement>(
+      'script[src*="challenges.cloudflare.com/turnstile"]'
+    );
+    if (!existingScript || turnstileReloadTick > 0) {
+      if (existingScript && turnstileReloadTick > 0) {
+        existingScript.remove();
+      }
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.defer = true;
+      script.onload = renderWidget;
+      script.onerror = handleLoadError;
+      document.head.appendChild(script);
+    } else {
+      existingScript.addEventListener("load", renderWidget);
+      existingScript.addEventListener("error", handleLoadError);
+    }
+
+    // Handle race where script finished loading right before listener attached
+    pollTimer = setInterval(() => {
+      if (window.turnstile) {
+        if (pollTimer) clearInterval(pollTimer);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        renderWidget();
+      }
+    }, 250);
+
+    timeoutTimer = setTimeout(() => {
+      if (!window.turnstile && !cancelled) {
+        setTurnstileLoadError(true);
+      }
+      if (pollTimer) clearInterval(pollTimer);
+    }, 10000);
 
     return () => {
       cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (existingScript) {
+        existingScript.removeEventListener("load", renderWidget);
+        existingScript.removeEventListener("error", handleLoadError);
+      }
       cleanupWidget();
     };
-  }, [isOpen, activeTab, turnstileSiteKey]);
+  }, [needsTurnstile, turnstileSiteKey, turnstileReloadTick]);
 
   if (!isOpen) return null;
 
@@ -177,9 +223,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
     setTurnstileToken(null);
+    setShowResendVerification(false);
   };
 
   const validateEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
+  const handleResendVerification = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!validateEmail(trimmedEmail)) {
+      setErrorMsg("لطفاً ابتدا نشانی ایمیل معتبر خود را وارد کنید.");
+      return;
+    }
+    if (turnstileSiteKey && !turnstileToken) {
+      setErrorMsg("لطفاً تأییدیه امنیتی (من ربات نیستم) را تکمیل کنید و سپس دوباره روی ارسال مجدد کلیک کنید.");
+      return;
+    }
+    setIsResendingVerification(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const res = await webResendVerification(trimmedEmail, turnstileToken);
+      setSuccessMsg(res.message);
+      setShowResendVerification(false);
+    } catch (err: any) {
+      setErrorMsg(err?.message || "ارسال مجدد ایمیل تأیید ناموفق بود.");
+    } finally {
+      setIsResendingVerification(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -239,7 +310,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     if (turnstileSiteKey && (activeTab === "register" || activeTab === "forgot") && !turnstileToken) {
-      setErrorMsg("لطفاً تأییدیه امنیتی (من ربات نیستم) را تکمیل کنید.");
+      setErrorMsg(
+        turnstileLoadError
+          ? "بارگذاری کد امنیتی (Cloudflare) با مشکل مواجه شد. لطفاً روی دکمه تلاش مجدد کپچا کلیک کنید."
+          : "لطفاً تأییدیه امنیتی (من ربات نیستم) را تکمیل کنید."
+      );
       return;
     }
 
@@ -248,6 +323,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       if (activeTab === "login") {
         const res = await webLogin(trimmedEmail, password);
         if (res.user) {
+          setShowResendVerification(false);
           onAuthSuccess(res.user);
           onClose();
         }
@@ -269,6 +345,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
     } catch (err: any) {
       setErrorMsg(err?.message || "خطا در ارتباط با سرور. لطفاً دوباره تلاش کنید.");
+      if (err?.code === "EMAIL_NOT_CONFIRMED") {
+        setShowResendVerification(true);
+      }
       if (turnstileWidgetIdRef.current && window.turnstile) {
         try {
           window.turnstile.reset(turnstileWidgetIdRef.current);
@@ -364,9 +443,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Error Alert */}
         {errorMsg && (
-          <div className="mb-4 p-3.5 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#8B4513]" />
-            <span className="leading-relaxed">{errorMsg}</span>
+          <div className="mb-4 p-3.5 bg-[#FAF0ED] border border-[#E9C8BC] rounded-2xl text-[#8B4513] text-xs font-bold space-y-2 animate-in fade-in">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#8B4513]" />
+              <span className="leading-relaxed">{errorMsg}</span>
+            </div>
+            {showResendVerification && activeTab === "login" && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  disabled={isResendingVerification}
+                  className="px-3 py-1.5 rounded-lg bg-[#8B4513] hover:bg-[#70360f] disabled:bg-slate-400 text-white text-[11px] font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  {isResendingVerification && <Loader2 className="w-3 h-3 animate-spin" />}
+                  <span>ارسال مجدد ایمیل تأیید</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -517,9 +611,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               )}
 
-              {turnstileSiteKey && (activeTab === "register" || activeTab === "forgot") && (
-                <div className="flex justify-center pt-1">
-                  <div ref={turnstileContainerRef} />
+              {needsTurnstile && (
+                <div className="space-y-2 pt-1">
+                  <div className="flex justify-center">
+                    <div ref={turnstileContainerRef} />
+                  </div>
+                  {turnstileLoadError && (
+                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] flex items-center justify-between gap-2">
+                      <span>بارگذاری تأییدیه امنیتی زمان‌بر شد.</span>
+                      <button
+                        type="button"
+                        onClick={() => setTurnstileReloadTick((t) => t + 1)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold cursor-pointer shrink-0"
+                      >
+                        تلاش مجدد
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </>

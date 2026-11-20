@@ -68,30 +68,69 @@ export function clearWebSession(): void {
   }
 }
 
+export interface WebAuthError extends Error {
+  code?: string;
+}
+
+function createWebAuthError(message: string, code?: string): WebAuthError {
+  const err = new Error(message) as WebAuthError;
+  if (code) err.code = code;
+  return err;
+}
+
+function translateRedirectErrorDescription(rawDesc: string, rawCode?: string | null): string {
+  const combined = `${rawCode || ""} ${rawDesc}`.toLowerCase();
+  if (combined.includes("otp_expired") || combined.includes("expired") || combined.includes("invalid")) {
+    return "لینک تأیید یا بازیابی رمز منقضی یا نامعتبر شده است. لطفاً دوباره درخواست دهید.";
+  }
+  if (combined.includes("access_denied")) {
+    return "دسترسی از طریق لینک ایمیل تأیید نشد. لطفاً دوباره تلاش کنید.";
+  }
+  return "اعتبارسنجی لینک ایمیل انجام نشد. لطفاً دوباره درخواست دهید.";
+}
+
 /**
  * Inspects URL hash/query params on return from Supabase email verification/recovery redirect,
  * persists tokens locally if present, and cleans the URL without any direct call to supabase.co.
  */
 export function consumeWebAuthRedirectParams(): {
   authNotice: string | null;
+  authError: string | null;
   hasTokens: boolean;
   isRecoveryMode: boolean;
+  pendingOtp: { tokenHash: string; type: string } | null;
 } {
   if (typeof window === "undefined") {
-    return { authNotice: null, hasTokens: false, isRecoveryMode: false };
+    return { authNotice: null, authError: null, hasTokens: false, isRecoveryMode: false, pendingOtp: null };
   }
 
   let authNotice: string | null = null;
+  let authError: string | null = null;
   let hasTokens = false;
   let isRecoveryMode = false;
+  let pendingOtp: { tokenHash: string; type: string } | null = null;
 
   try {
     const url = new URL(window.location.href);
     const authParam = url.searchParams.get("auth");
     const typeParam = url.searchParams.get("type");
+    const tokenHashParam = url.searchParams.get("token_hash");
+    const queryError = url.searchParams.get("error");
+    const queryErrorCode = url.searchParams.get("error_code");
+    const queryErrorDesc = url.searchParams.get("error_description");
 
-    if (window.location.hash && window.location.hash.includes("access_token=")) {
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const rawHash = window.location.hash ? window.location.hash.replace(/^#/, "") : "";
+    const hashParams = rawHash ? new URLSearchParams(rawHash) : null;
+    const hashError = hashParams?.get("error") || null;
+    const hashErrorCode = hashParams?.get("error_code") || null;
+    const hashErrorDesc = hashParams?.get("error_description") || null;
+
+    if (hashError || hashErrorDesc || queryError || queryErrorDesc) {
+      authError = translateRedirectErrorDescription(
+        hashErrorDesc || queryErrorDesc || hashError || queryError || "",
+        hashErrorCode || queryErrorCode
+      );
+    } else if (hashParams && hashParams.get("access_token")) {
       const accessToken = hashParams.get("access_token");
       const refreshToken = hashParams.get("refresh_token") || "";
       const expiresAtRaw = hashParams.get("expires_at");
@@ -112,6 +151,11 @@ export function consumeWebAuthRedirectParams(): {
       } else if (type === "signup" || authParam === "verified") {
         authNotice = "ایمیل شما با موفقیت تأیید شد و حساب کاربری شما فعال است.";
       }
+    } else if (tokenHashParam) {
+      pendingOtp = {
+        tokenHash: tokenHashParam,
+        type: typeParam || (authParam === "recovery" ? "recovery" : "signup"),
+      };
     } else if (authParam === "verified") {
       authNotice = "ایمیل شما تأیید شد. اکنون می‌توانید وارد حساب کاربری خود شوید.";
     } else if (authParam === "recovery" || typeParam === "recovery") {
@@ -119,16 +163,29 @@ export function consumeWebAuthRedirectParams(): {
       authNotice = "لینک بازیابی تأیید شد. لطفاً رمز عبور جدید حساب خود را ثبت کنید.";
     }
 
-    if (authParam || typeParam || (window.location.hash && window.location.hash.includes("access_token="))) {
+    const shouldCleanUrl = Boolean(
+      authParam ||
+        typeParam ||
+        tokenHashParam ||
+        queryError ||
+        queryErrorCode ||
+        queryErrorDesc ||
+        (hashParams && (hashParams.get("access_token") || hashError || hashErrorDesc))
+    );
+    if (shouldCleanUrl) {
       url.searchParams.delete("auth");
       url.searchParams.delete("type");
+      url.searchParams.delete("token_hash");
+      url.searchParams.delete("error");
+      url.searchParams.delete("error_code");
+      url.searchParams.delete("error_description");
       window.history.replaceState({}, document.title, url.pathname + url.search);
     }
   } catch {
     // ignore URL parse issues
   }
 
-  return { authNotice, hasTokens, isRecoveryMode };
+  return { authNotice, authError, hasTokens, isRecoveryMode, pendingOtp };
 }
 
 async function parseJsonSafe(res: Response): Promise<any> {
@@ -139,13 +196,40 @@ async function parseJsonSafe(res: Response): Promise<any> {
   }
 }
 
+function extractApiErrorMessage(data: any, res: Response, fallback: string): string {
+  if (data?.error === "RATE_LIMIT_EXCEEDED" && typeof data?.message === "string" && data.message.trim()) {
+    return data.message.trim();
+  }
+  if (typeof data?.error === "string" && data.error.trim() && data.error !== "RATE_LIMIT_EXCEEDED" && data.error !== "SERVER_ERROR") {
+    return data.error.trim();
+  }
+  if (typeof data?.message === "string" && data.message.trim()) {
+    return data.message.trim();
+  }
+  if (res.status === 429) {
+    return "تعداد درخواست‌ها بیش از حد مجاز است. لطفاً دقایقی دیگر دوباره تلاش کنید.";
+  }
+  if (res.status >= 500) {
+    return "خطای موقت در سرور احراز هویت. لطفاً لحظاتی دیگر دوباره تلاش کنید.";
+  }
+  return fallback;
+}
+
+async function safeAuthFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw createWebAuthError("خطا در برقراری ارتباط با سرور. لطفاً اتصال اینترنت خود را بررسی کنید.");
+  }
+}
+
 export async function webRegister(
   fullName: string,
   email: string,
   password: string,
   turnstileToken?: string | null
 ): Promise<WebAuthResponse> {
-  const res = await fetch(getApiUrl("/api/web/auth/register"), {
+  const res = await safeAuthFetch(getApiUrl("/api/web/auth/register"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -157,7 +241,10 @@ export async function webRegister(
   });
   const data = await parseJsonSafe(res);
   if (!res.ok || !data?.success) {
-    throw new Error(data?.error || "ثبت‌نام با خطا مواجه شد. لطفاً دوباره تلاش کنید.");
+    throw createWebAuthError(
+      extractApiErrorMessage(data, res, "ثبت‌نام با خطا مواجه شد. لطفاً دوباره تلاش کنید."),
+      data?.code
+    );
   }
   if (data.session?.access_token) {
     saveWebSession(data.session);
@@ -166,24 +253,27 @@ export async function webRegister(
 }
 
 export async function webLogin(email: string, password: string): Promise<WebAuthResponse> {
-  const res = await fetch(getApiUrl("/api/web/auth/login"), {
+  const res = await safeAuthFetch(getApiUrl("/api/web/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
   const data = await parseJsonSafe(res);
   if (!res.ok || !data?.success || !data?.session?.access_token) {
-    throw new Error(data?.error || "ورود به حساب انجام نشد. لطفاً اطلاعات را بررسی کنید.");
+    throw createWebAuthError(
+      extractApiErrorMessage(data, res, "ورود به حساب انجام نشد. لطفاً اطلاعات را بررسی کنید."),
+      data?.code
+    );
   }
   saveWebSession(data.session);
   return data;
 }
 
-export async function webForgotPassword(
+export async function webResendVerification(
   email: string,
   turnstileToken?: string | null
 ): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(getApiUrl("/api/web/auth/forgot-password"), {
+  const res = await safeAuthFetch(getApiUrl("/api/web/auth/resend-verification"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -193,7 +283,59 @@ export async function webForgotPassword(
   });
   const data = await parseJsonSafe(res);
   if (!res.ok || !data?.success) {
-    throw new Error(data?.error || "ارسال ایمیل بازیابی رمز با خطا مواجه شد.");
+    throw createWebAuthError(
+      extractApiErrorMessage(data, res, "ارسال مجدد ایمیل تأیید با خطا مواجه شد."),
+      data?.code
+    );
+  }
+  return {
+    success: true,
+    message: data.message || "لینک تأیید جدید به ایمیل شما ارسال شد.",
+  };
+}
+
+export async function webVerifyOtp(
+  tokenHash: string,
+  type: string
+): Promise<{ success: boolean; type: string; user: WebUserProfile | null }> {
+  const res = await safeAuthFetch(getApiUrl("/api/web/auth/verify-otp"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tokenHash, type }),
+  });
+  const data = await parseJsonSafe(res);
+  if (!res.ok || !data?.success || !data?.session?.access_token) {
+    throw createWebAuthError(
+      extractApiErrorMessage(data, res, "تأیید لینک ایمیل ناموفق بود یا لینک منقضی شده است."),
+      data?.code
+    );
+  }
+  saveWebSession(data.session);
+  return {
+    success: true,
+    type: data.type || type,
+    user: data.user || null,
+  };
+}
+
+export async function webForgotPassword(
+  email: string,
+  turnstileToken?: string | null
+): Promise<{ success: boolean; message: string }> {
+  const res = await safeAuthFetch(getApiUrl("/api/web/auth/forgot-password"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email,
+      ...(turnstileToken ? { turnstileToken } : {}),
+    }),
+  });
+  const data = await parseJsonSafe(res);
+  if (!res.ok || !data?.success) {
+    throw createWebAuthError(
+      extractApiErrorMessage(data, res, "ارسال ایمیل بازیابی رمز با خطا مواجه شد."),
+      data?.code
+    );
   }
   return {
     success: true,
@@ -206,35 +348,38 @@ export async function webUpdatePassword(
 ): Promise<{ success: boolean; message: string }> {
   const session = getStoredWebSession();
   if (!session?.access_token) {
-    throw new Error("توکن بازیابی یافت نشد. لطفاً دوباره روی لینک ایمیل بازیابی کلیک کنید.");
+    throw createWebAuthError("توکن بازیابی یافت نشد. لطفاً دوباره روی لینک ایمیل بازیابی کلیک کنید.");
   }
 
-  let res = await fetch(getApiUrl("/api/web/auth/update-password"), {
+  let res = await safeAuthFetch(getApiUrl("/api/web/auth/update-password"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, refresh_token: session.refresh_token || undefined }),
   });
 
   if (res.status === 401 && session.refresh_token) {
     const refreshed = await webRefreshSession(session.refresh_token);
     if (refreshed?.session?.access_token) {
-      res = await fetch(getApiUrl("/api/web/auth/update-password"), {
+      res = await safeAuthFetch(getApiUrl("/api/web/auth/update-password"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${refreshed.session.access_token}`,
         },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password, refresh_token: refreshed.session.refresh_token || undefined }),
       });
     }
   }
 
   const data = await parseJsonSafe(res);
   if (!res.ok || !data?.success) {
-    throw new Error(data?.error || "تغییر رمز عبور انجام نشد. لطفاً دوباره تلاش کنید.");
+    throw createWebAuthError(
+      extractApiErrorMessage(data, res, "تغییر رمز عبور انجام نشد. لطفاً دوباره تلاش کنید."),
+      data?.code
+    );
   }
   return {
     success: true,
@@ -315,10 +460,15 @@ export async function webFetchMe(): Promise<WebUserProfile | null> {
   }
 }
 
-export type WebProductKey = "single" | "pack_10" | "annual";
+export type WebProductKey = "single" | "pack_5" | "pack_10" | "annual";
 
 export interface WebProductsMap {
   single: {
+    amountRials: number;
+    credits: number;
+    label: string;
+  };
+  pack_5: {
     amountRials: number;
     credits: number;
     label: string;
@@ -338,12 +488,17 @@ export interface WebProductsMap {
 
 export const DEFAULT_WEB_PRODUCTS: WebProductsMap = {
   single: {
-    amountRials: 290000,
+    amountRials: 690000,
     credits: 1,
     label: "تحلیل تکی ابلاغیه (نسخه وب)",
   },
+  pack_5: {
+    amountRials: 2390000,
+    credits: 5,
+    label: "بسته ۵ عددی تحلیل ابلاغیه (نسخه وب)",
+  },
   pack_10: {
-    amountRials: 1990000,
+    amountRials: 3690000,
     credits: 10,
     label: "بسته ۱۰ عددی تحلیل ابلاغیه (نسخه وب)",
   },

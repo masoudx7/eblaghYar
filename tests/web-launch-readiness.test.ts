@@ -310,21 +310,21 @@ describe("Web Launch-Readiness: 24h AI Pass, Reconcile, Claim Guard, Atomic Annu
     expect(resOther.status).toBe(409);
   });
 
-  it("atomically stacks concurrent annual renewals via extend_profile_annual RPC and sanitizes 500 errors", async () => {
-    const user = store.seedUser({ email: "annual-stack@example.com" });
+  it("atomically stacks concurrent credit orders (pack_10) and sanitizes 500 errors", async () => {
+    const user = store.seedUser({ email: "pack-stack@example.com", credits: 2 });
     const order1 = store.seedPayment({
       user_id: user.id,
-      product: "annual",
+      product: "pack_10",
       status: "pending",
-      authority: "A_ANNUAL_1",
-      amount_rials: WEB_PRODUCTS.annual.amountRials,
+      authority: "A_PACK_1",
+      amount_rials: WEB_PRODUCTS.pack_10.amountRials,
     });
     const order2 = store.seedPayment({
       user_id: user.id,
-      product: "annual",
+      product: "pack_10",
       status: "pending",
-      authority: "A_ANNUAL_2",
-      amount_rials: WEB_PRODUCTS.annual.amountRials,
+      authority: "A_PACK_2",
+      amount_rials: WEB_PRODUCTS.pack_10.amountRials,
     });
 
     process.env.ZARINPAL_MERCHANT_ID = "12345678-1234-1234-1234-123456789012";
@@ -341,9 +341,7 @@ describe("Web Launch-Readiness: 24h AI Pass, Reconcile, Claim Guard, Atomic Annu
     ]);
 
     const prof = store.tables.profiles.find((p) => p.id === user.id);
-    const expiresMs = new Date(prof.annual_expires_at).getTime();
-    const expectedMinMs = Date.now() + 720 * 24 * 60 * 60 * 1000;
-    expect(expiresMs).toBeGreaterThan(expectedMinMs);
+    expect(prof.credits).toBe(22);
 
     // Verify 500 error does NOT leak internal secret/stack error.message to client
     generateContentMock.mockRejectedValue(new Error("SENSITIVE_DB_PASSWORD_LEAK_12345"));

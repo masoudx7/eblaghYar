@@ -7,6 +7,7 @@ export interface MockUserRecord {
   user_metadata: { full_name?: string };
   accessToken: string;
   refreshToken: string;
+  emailConfirmed: boolean;
 }
 
 export class InMemorySupabaseStore {
@@ -48,6 +49,8 @@ export class InMemorySupabaseStore {
     annualExpiresAt?: string | null;
     dailyAnalysesCount?: number;
     lastAnalysisDate?: string | null;
+    emailConfirmed?: boolean;
+    skipProfile?: boolean;
   }): MockUserRecord {
     const id = opts.id || crypto.randomUUID();
     const record: MockUserRecord = {
@@ -57,22 +60,25 @@ export class InMemorySupabaseStore {
       user_metadata: { full_name: opts.fullName || "کاربر تست" },
       accessToken: `acc_${crypto.randomUUID()}`,
       refreshToken: `ref_${crypto.randomUUID()}`,
+      emailConfirmed: opts.emailConfirmed ?? true,
     };
     this.users.set(id, record);
     this.usersByEmail.set(record.email, record);
     this.usersByAccessToken.set(record.accessToken, record);
     this.usersByRefreshToken.set(record.refreshToken, record);
 
-    this.tables.profiles.push({
-      id,
-      email: record.email,
-      full_name: record.user_metadata.full_name,
-      credits: opts.credits ?? 0,
-      annual_expires_at: opts.annualExpiresAt ?? null,
-      daily_analyses_count: opts.dailyAnalysesCount ?? 0,
-      last_analysis_date: opts.lastAnalysisDate ?? null,
-      created_at: new Date().toISOString(),
-    });
+    if (!opts.skipProfile) {
+      this.tables.profiles.push({
+        id,
+        email: record.email,
+        full_name: record.user_metadata.full_name,
+        credits: opts.credits ?? 0,
+        annual_expires_at: opts.annualExpiresAt ?? null,
+        daily_analyses_count: opts.dailyAnalysesCount ?? 0,
+        last_analysis_date: opts.lastAnalysisDate ?? null,
+        created_at: new Date().toISOString(),
+      });
+    }
     return record;
   }
 
@@ -387,6 +393,48 @@ export function createMockSupabaseClients(store: InMemorySupabaseStore) {
       if (!user || user.password !== opts.password) {
         return { data: { user: null, session: null }, error: { message: "Invalid login credentials" } };
       }
+      if (!user.emailConfirmed) {
+        return {
+          data: { user: null, session: null },
+          error: { code: "email_not_confirmed", message: "Email not confirmed" },
+        };
+      }
+      return {
+        data: {
+          user: { id: user.id, email: user.email, user_metadata: user.user_metadata },
+          session: {
+            access_token: user.accessToken,
+            refresh_token: user.refreshToken,
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+          },
+        },
+        error: null,
+      };
+    },
+    async resend(opts: { type: string; email: string; options?: any }) {
+      const user = store.usersByEmail.get(opts.email.toLowerCase());
+      if (!user) {
+        return { data: {}, error: null };
+      }
+      store.lastResetEmailOptions = { email: opts.email, options: opts.options, type: opts.type };
+      return { data: {}, error: null };
+    },
+    async verifyOtp(opts: { token_hash: string; type: string }) {
+      if (!opts.token_hash || !opts.token_hash.startsWith("valid_")) {
+        return {
+          data: { user: null, session: null },
+          error: { code: "otp_expired", message: "Token has expired or is invalid" },
+        };
+      }
+      const email = opts.token_hash.replace(/^valid_/, "").toLowerCase();
+      const user = store.usersByEmail.get(email);
+      if (!user) {
+        return {
+          data: { user: null, session: null },
+          error: { code: "otp_expired", message: "Token has expired or is invalid" },
+        };
+      }
+      user.emailConfirmed = true;
       return {
         data: {
           user: { id: user.id, email: user.email, user_metadata: user.user_metadata },
@@ -428,10 +476,36 @@ export function createMockSupabaseClients(store: InMemorySupabaseStore) {
       async signOut(_token: string) {
         return { error: null };
       },
-      async updateUserById(userId: string, attrs: { password?: string }) {
+      async listUsers(_opts?: any) {
+        const users = Array.from(store.users.values()).map((u) => ({
+          id: u.id,
+          email: u.email,
+          user_metadata: u.user_metadata,
+          email_confirmed_at: u.emailConfirmed ? new Date().toISOString() : null,
+          created_at: new Date().toISOString(),
+        }));
+        return { data: { users }, error: null };
+      },
+      async getUserById(userId: string) {
+        const u = store.users.get(userId);
+        if (!u) return { data: { user: null }, error: { message: "User not found" } };
+        return {
+          data: {
+            user: {
+              id: u.id,
+              email: u.email,
+              user_metadata: u.user_metadata,
+              email_confirmed_at: u.emailConfirmed ? new Date().toISOString() : null,
+            },
+          },
+          error: null,
+        };
+      },
+      async updateUserById(userId: string, attrs: { password?: string; email_confirm?: boolean }) {
         const user = store.users.get(userId);
         if (!user) return { error: { message: "User not found" } };
         if (attrs.password) user.password = attrs.password;
+        if (attrs.email_confirm) user.emailConfirmed = true;
         return { data: { user }, error: null };
       },
     },

@@ -14,6 +14,7 @@ import { CoinPurchaseModal } from "./components/CoinPurchaseModal";
 import { WebPaywallModal } from "./components/WebPaywallModal";
 import { AuthModal, AuthTab } from "./components/AuthModal";
 import { WebOrdersModal } from "./components/WebOrdersModal";
+import { AdminPanelModal } from "./components/AdminPanelModal";
 import {
   JudicialNoticeAnalysis,
   AnalysisHistoryItem,
@@ -27,6 +28,7 @@ import {
   WebPaymentStatusResponse,
   webFetchMe,
   webLogout,
+  webVerifyOtp,
   webRefreshSession,
   getStoredWebSession,
   getStoredEntitlementToken,
@@ -72,7 +74,9 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authModalTab, setAuthModalTab] = useState<AuthTab>("login");
   const [isWebOrdersOpen, setIsWebOrdersOpen] = useState<boolean>(false);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState<boolean>(false);
   const [webAuthNotice, setWebAuthNotice] = useState<string | null>(null);
+  const [webAuthNoticeIsError, setWebAuthNoticeIsError] = useState<boolean>(false);
   const [pendingPaymentOrderId, setPendingPaymentOrderId] = useState<string | null>(null);
   const [failedOrderId, setFailedOrderId] = useState<string | null>(null);
   const [isRecheckingPayment, setIsRecheckingPayment] = useState<boolean>(false);
@@ -119,16 +123,20 @@ export default function App() {
       saveEntitlementToken(statusRes.entitlement_token);
       setHasSingleEntitlement(true);
       setCurrentAnalysis(null);
-    } else if (statusRes.product === "pack_10" || statusRes.product === "annual") {
+    } else if (statusRes.product === "pack_10" || statusRes.product === "pack_5") {
       await refreshWebUser();
     }
   };
 
   useEffect(() => {
     if (Capacitor.isNativePlatform()) return;
-    const { authNotice, isRecoveryMode } = consumeWebAuthRedirectParams();
-    if (authNotice) {
+    const { authNotice, authError, isRecoveryMode, pendingOtp } = consumeWebAuthRedirectParams();
+    if (authError) {
+      setWebAuthNotice(authError);
+      setWebAuthNoticeIsError(true);
+    } else if (authNotice) {
       setWebAuthNotice(authNotice);
+      setWebAuthNoticeIsError(false);
     }
     if (isRecoveryMode) {
       setAuthModalTab("recovery");
@@ -141,11 +149,34 @@ export default function App() {
     } else if (paymentStatus === "success" && orderId) {
       setPendingPaymentOrderId(orderId);
     }
-    webFetchMe().then((profile) => {
-      if (profile) {
-        setWebUser(profile);
-      }
-    });
+
+    if (pendingOtp) {
+      webVerifyOtp(pendingOtp.tokenHash, pendingOtp.type)
+        .then((res) => {
+          if (res.user) {
+            setWebUser(res.user);
+          }
+          if (res.type === "recovery") {
+            setWebAuthNotice("لینک بازیابی تأیید شد. لطفاً رمز عبور جدید حساب خود را ثبت کنید.");
+            setWebAuthNoticeIsError(false);
+            setAuthModalTab("recovery");
+            setIsAuthModalOpen(true);
+          } else {
+            setWebAuthNotice("ایمیل شما با موفقیت تأیید شد و وارد حساب کاربری خود شدید.");
+            setWebAuthNoticeIsError(false);
+          }
+        })
+        .catch((err: any) => {
+          setWebAuthNotice(err?.message || "تأیید لینک ایمیل ناموفق بود یا لینک منقضی شده است.");
+          setWebAuthNoticeIsError(true);
+        });
+    } else {
+      webFetchMe().then((profile) => {
+        if (profile) {
+          setWebUser(profile);
+        }
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -678,21 +709,46 @@ export default function App() {
         onWebLogout={!Capacitor.isNativePlatform() ? handleWebLogout : undefined}
         onRefreshWebUser={!Capacitor.isNativePlatform() ? refreshWebUser : undefined}
         onOpenWebOrders={!Capacitor.isNativePlatform() ? () => setIsWebOrdersOpen(true) : undefined}
+        onOpenAdminPanel={!Capacitor.isNativePlatform() ? () => setIsAdminPanelOpen(true) : undefined}
       />
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* اعلان وضعیت تأیید ایمیل / بازیابی رمز در نسخه وب */}
         {!Capacitor.isNativePlatform() && webAuthNotice && (
-          <div className="max-w-4xl mx-auto mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs sm:text-sm font-bold flex items-center justify-between gap-3 shadow-xs animate-in fade-in">
-            <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+          <div
+            className={`max-w-4xl mx-auto mb-6 p-4 rounded-2xl text-xs sm:text-sm font-bold flex items-center justify-between gap-3 shadow-xs animate-in fade-in border ${
+              webAuthNoticeIsError
+                ? "bg-red-50 border-red-200 text-red-800"
+                : "bg-emerald-50 border-emerald-200 text-emerald-800"
+            }`}
+          >
+            <div className="flex items-center gap-2.5 flex-wrap">
+              {webAuthNoticeIsError ? (
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              )}
               <span>{webAuthNotice}</span>
+              {!webUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthModalTab("login");
+                    setIsAuthModalOpen(true);
+                  }}
+                  className="px-3 py-1 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  ورود به حساب
+                </button>
+              )}
             </div>
             <button
               type="button"
               onClick={() => setWebAuthNotice(null)}
-              className="p-1.5 rounded-xl text-emerald-700 hover:bg-emerald-100 transition-colors cursor-pointer"
+              className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                webAuthNoticeIsError ? "text-red-700 hover:bg-red-100" : "text-emerald-700 hover:bg-emerald-100"
+              }`}
               aria-label="بستن اعلان"
             >
               <X className="w-4 h-4" />
@@ -1109,6 +1165,15 @@ export default function App() {
             });
             setCurrentAnalysis(null);
           }}
+        />
+      )}
+
+      {/* Admin Panel Modal for masoudx7@gmail.com */}
+      {!Capacitor.isNativePlatform() && (
+        <AdminPanelModal
+          isOpen={isAdminPanelOpen}
+          onClose={() => setIsAdminPanelOpen(false)}
+          currentUserEmail={webUser?.email || ""}
         />
       )}
 
